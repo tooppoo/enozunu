@@ -1,0 +1,24 @@
+{
+  "name": "template-dev",
+  "image": "mcr.microsoft.com/devcontainers/base:2.1.9-trixie",
+  "workspaceFolder": "/workspaces/fizz",
+  "remoteUser": "vscode",
+  "runArgs": [
+    "--init"
+  ],
+  "postCreateCommand": "sh scripts/setup-dev.sh",
+  "features": {
+    "ghcr.io/devcontainers/features/github-cli:1": {}
+  },
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "EditorConfig.EditorConfig"
+      ],
+      "settings": {
+        "editor.formatOnSave": true,
+        "files.eol": "\n"
+      }
+    }
+  }
+}

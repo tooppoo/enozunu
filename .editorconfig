@@ -1,0 +1,14 @@
+
+[*]
+charset = utf-8
+insert_final_newline = true
+trim_trailing_whitespace = true
+end_of_line = lf
+
+[Makefile]
+indent_style = tab
+indent_size = 4
+
+[*.{rs,go,md,kdl,json,sh}]
+indent_style = space
+indent_size = 2

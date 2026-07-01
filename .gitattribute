@@ -1,0 +1,67 @@
+
+# Normalize text files for Linux/devcontainer-based development.
+# The working tree should stay LF even when the repository is checked out
+# from Windows, because development is expected to happen inside devcontainer.
+* text=auto eol=lf
+
+# Repository metadata
+.gitattributes text eol=lf
+.gitignore text eol=lf
+.editorconfig text eol=lf
+
+# Go
+*.go text eol=lf
+go.mod text eol=lf
+go.sum text eol=lf
+
+# Rust
+*.rs text eol=lf
+
+# Configuration and data files
+*.json text eol=lf
+*.jsonc text eol=lf
+*.yaml text eol=lf
+*.yml text eol=lf
+*.toml text eol=lf
+*.env.example text eol=lf
+
+# Documentation
+*.md text eol=lf
+*.txt text eol=lf
+
+# Shell and container-related files
+*.sh text eol=lf
+*.bash text eol=lf
+*.zsh text eol=lf
+Dockerfile text eol=lf
+*.dockerfile text eol=lf
+
+# Windows-native command scripts should remain CRLF if they are ever added.
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# Images
+*.png binary
+*.jpg binary
+*.jpeg binary
+*.gif binary
+*.webp binary
+*.ico binary
+*.svg text eol=lf
+
+# Archives and packaged artifacts
+*.zip binary
+*.tar binary
+*.tar.gz binary
+*.tgz binary
+*.gz binary
+*.7z binary
+
+# Documents
+*.pdf binary
+
+# Build artifacts / executables
+*.exe binary
+*.dll binary
+*.so binary
+*.dylib binary

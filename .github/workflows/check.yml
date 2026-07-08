@@ -38,8 +38,10 @@ jobs:
 
       # Coverage is hard-enforced in `just check` via cargo-llvm-cov's
       # --fail-under-* thresholds, so a failed upload must not fail CI here.
+      # use_oidc drives tokenless upload via the id-token granted above.
       - name: Upload coverage to Codecov
         uses: codecov/codecov-action@0fb7174895f61a3b6b78fc075e0cd60383518dac # v5.5.5
         with:
+          use_oidc: true
           files: cov.json
           fail_ci_if_error: false

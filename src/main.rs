@@ -20,6 +20,15 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
+    /// Write a starter manifest with placeholder values, without overwriting an existing one.
+    Init {
+        /// Path of the manifest to create. Defaults to enozunu.kdl in the project root.
+        #[arg(long)]
+        manifest: Option<PathBuf>,
+        /// Project root directory. Defaults to the current directory.
+        #[arg(long, default_value = ".")]
+        project_root: PathBuf,
+    },
     /// Parse and validate the manifest without materializing anything.
     Validate {
         /// Path to the manifest. Defaults to enozunu.kdl in the project root.
@@ -46,6 +55,17 @@ fn main() -> ExitCode {
     let cli = Cli::parse();
 
     let result = match cli.command {
+        Command::Init {
+            manifest,
+            project_root,
+        } => {
+            let manifest_path = manifest.unwrap_or_else(|| project_root.join(MANIFEST_FILE_NAME));
+            enozunu::init::run_init(&manifest_path)
+                .map(|()| {
+                    println!("created {}", manifest_path.display());
+                })
+                .map_err(|d| vec![d])
+        }
         Command::Validate {
             manifest,
             project_root,

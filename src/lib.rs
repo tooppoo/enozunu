@@ -4,6 +4,7 @@
 
 pub mod diagnostics;
 pub mod git;
+pub mod init;
 pub mod manifest;
 pub mod materialize;
 pub mod plan;

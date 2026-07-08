@@ -1,0 +1,5 @@
+#!/bin/sh
+# git-kura managed pre-commit hook. Do not edit.
+# Installed by: git kura tools install pre-commit
+# Remove with:  git kura tools uninstall pre-commit
+exec git kura tools run pre-commit "$@"

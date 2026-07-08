@@ -72,6 +72,12 @@ Build the CLI with Cargo:
 cargo build --release
 ```
 
+Create a starter manifest filled with placeholder values:
+
+```sh
+enozunu init
+```
+
 Validate the manifest of the current project:
 
 ```sh
@@ -84,7 +90,7 @@ Resolve declared sources and materialize them into Claude project paths:
 enozunu summon
 ```
 
-Both commands read `enozunu.kdl` in the project root by default.
+All commands operate on `enozunu.kdl` in the project root by default.
 Use `--manifest` and `--project-root` to override the defaults.
 
 ## File Format Policy

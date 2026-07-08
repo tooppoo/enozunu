@@ -17,7 +17,7 @@ Examples:
 - you want target AI-native configuration to be regenerated from a manifest
 - you want to track what source revision was materialized
 
-For v0.0.x, this means declaring sources in `enozunu.consumer.kdl` and materializing them into Claude project paths.
+For v0.0.x, this means declaring sources in `enozunu.kdl` and materializing them into Claude project paths.
 
 ## Do Not Use Enozunu When
 

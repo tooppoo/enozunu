@@ -49,7 +49,7 @@ but whether it works as expected in another target AI is the user's responsibili
 
 Enozunu-managed target AI-native directories are generated output.
 
-For v0.0.x, `.claude/` may be generated from `enozunu.consumer.kdl`. Manual edits inside generated output are not treated as source of truth. Enozunu does not try to preserve, detect, or merge manual edits in generated output.
+For v0.0.x, `.claude/` may be generated from `enozunu.kdl`. Manual edits inside generated output are not treated as source of truth. Enozunu does not try to preserve, detect, or merge manual edits in generated output.
 
 If manual editing is required,
 manage the target AI-native directory directly,
@@ -70,7 +70,7 @@ JSON  -> machine-generated records
 In v0.0.x:
 
 ```text
-enozunu.consumer.kdl        # human-authored configuration
+enozunu.kdl                 # human-authored configuration
 .enozunu/provenance.json    # machine-generated derived record
 ```
 

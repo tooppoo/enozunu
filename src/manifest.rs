@@ -1,4 +1,4 @@
-//! Parses and validates `enozunu.consumer.kdl` into the domain model.
+//! Parses and validates `enozunu.kdl` into the domain model.
 //!
 //! This module owns syntax-level and schema-level validation of the human-authored manifest.
 //! It does not resolve Git sources or inspect the filesystem; those checks belong to the resolution and materialization layers.

@@ -22,7 +22,7 @@ struct Cli {
 enum Command {
     /// Parse and validate the manifest without materializing anything.
     Validate {
-        /// Path to the manifest. Defaults to enozunu.consumer.kdl in the project root.
+        /// Path to the manifest. Defaults to enozunu.kdl in the project root.
         #[arg(long)]
         manifest: Option<PathBuf>,
         /// Project root directory. Defaults to the current directory.
@@ -30,8 +30,10 @@ enum Command {
         project_root: PathBuf,
     },
     /// Resolve sources and materialize them into target AI-native paths.
-    Materialize {
-        /// Path to the manifest. Defaults to enozunu.consumer.kdl in the project root.
+    // `summon` is the user-facing name for the internal materialization pipeline (`run_materialize`).
+    // The CLI verb and the `materialize` module deliberately differ; keep both in mind when renaming either side.
+    Summon {
+        /// Path to the manifest. Defaults to enozunu.kdl in the project root.
         #[arg(long)]
         manifest: Option<PathBuf>,
         /// Project root directory. Defaults to the current directory.
@@ -53,7 +55,7 @@ fn main() -> ExitCode {
                 println!("{} is valid", manifest_path.display());
             })
         }
-        Command::Materialize {
+        Command::Summon {
             manifest,
             project_root,
         } => {

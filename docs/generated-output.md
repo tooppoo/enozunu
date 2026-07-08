@@ -9,15 +9,15 @@ For v0.0.x, this primarily means `.claude/`.
 The primary source of truth is:
 
 ```text
-enozunu.consumer.kdl
+enozunu.kdl
 ```
 
 The generated target AI-native output is not source of truth.
 
-For v0.0.x, `enozunu.consumer.kdl` is human-authored KDL. `provenance.json` is machine-generated JSON.
+For v0.0.x, `enozunu.kdl` is human-authored KDL. `provenance.json` is machine-generated JSON.
 
 ```text
-enozunu.consumer.kdl        # human-authored configuration
+enozunu.kdl                 # human-authored configuration
 .enozunu/provenance.json    # machine-generated derived record
 ```
 
@@ -26,7 +26,7 @@ enozunu.consumer.kdl        # human-authored configuration
 Recommended Git-managed files:
 
 ```text
-enozunu.consumer.kdl
+enozunu.kdl
 .enozunu/provenance.json
 ```
 

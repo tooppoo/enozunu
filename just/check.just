@@ -16,7 +16,7 @@ test:
     --fail-under-lines 80 \
     --fail-under-file-lines 80 \
     --fail-under-regions 80 \
-    --ignore-filename-regex "cli/src/main|src/bin/gen_semantic_docs|model"
+    --ignore-filename-regex "src/main"
 
 # run all formatting checks
 [group('check')]

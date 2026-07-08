@@ -3,6 +3,7 @@
 //! The starter manifest is a fixed document that exercises every field the config-version 1 schema accepts, so users can discover what can be written by reading it.
 //! All values are placeholders meant to be replaced; resolving them with `enozunu summon` is not expected to succeed.
 
+use std::io::Write;
 use std::path::Path;
 
 use crate::diagnostics::{Diagnostic, DiagnosticCode};
@@ -61,16 +62,31 @@ enozunu config-version=1 {
 /// Refuses to overwrite an existing file.
 /// `init` bootstraps new projects; silently replacing a hand-edited manifest would destroy user configuration.
 pub fn run_init(manifest_path: &Path) -> Result<(), Diagnostic> {
-    if manifest_path.exists() {
-        return Err(Diagnostic::new(
-            DiagnosticCode::Io,
-            format!(
-                "{} already exists; refusing to overwrite it",
-                manifest_path.display()
-            ),
-        ));
-    }
-    std::fs::write(manifest_path, TEMPLATE).map_err(|e| {
+    // An exclusive create (`O_CREAT | O_EXCL`) instead of an exists-then-write sequence.
+    // The exists check would follow a dangling symlink and let init write outside the intended path, and it would race with a concurrently created manifest.
+    let mut file = match std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(manifest_path)
+    {
+        Ok(file) => file,
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+            return Err(Diagnostic::new(
+                DiagnosticCode::Io,
+                format!(
+                    "{} already exists; refusing to overwrite it",
+                    manifest_path.display()
+                ),
+            ));
+        }
+        Err(e) => {
+            return Err(Diagnostic::new(
+                DiagnosticCode::Io,
+                format!("failed to write {}: {e}", manifest_path.display()),
+            ));
+        }
+    };
+    file.write_all(TEMPLATE.as_bytes()).map_err(|e| {
         Diagnostic::new(
             DiagnosticCode::Io,
             format!("failed to write {}: {e}", manifest_path.display()),
@@ -100,6 +116,19 @@ mod tests {
 
         let written = std::fs::read_to_string(&path).unwrap();
         assert_eq!(written, TEMPLATE);
+    }
+
+    #[test]
+    fn refuses_dangling_symlink_at_manifest_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("enozunu.kdl");
+        let target = tmp.path().join("elsewhere.kdl");
+        std::os::unix::fs::symlink(&target, &path).unwrap();
+
+        let diag = run_init(&path).unwrap_err();
+
+        assert_eq!(diag.code, DiagnosticCode::Io);
+        assert!(!target.exists());
     }
 
     #[test]

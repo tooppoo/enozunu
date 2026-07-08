@@ -19,8 +19,7 @@ v0.0.x focuses on centralized definitions, not exact reproducibility.
 
 ## What Enozunu Does
 
-Enozunu manages where AI-agent configuration comes from
-and where it is materialized.
+Enozunu manages where AI-agent configuration comes from and where it is materialized.
 
 For v0.0.x, the target AI is Claude only.
 A Skill source can be materialized into `.claude/skills/<name>/`.
@@ -61,10 +60,32 @@ Enozunu does not reimplement Claude, Codex, or any other target AI-native plugin
 
 Enozunu does not validate whether a source was originally created for Claude.
 It validates artifact shape and materializes it.
-Whether a reused Skill or agent behaves as expected in a target AI
-is outside Enozunu's guarantee.
+Whether a reused Skill or agent behaves as expected in a target AI is outside Enozunu's guarantee.
 
 Enozunu also does not try to reconcile generated output with manual edits. If a target AI-native directory needs to be hand-maintained, manage it directly instead of treating it as Enozunu-generated output.
+
+## Usage
+
+Build the CLI with Cargo:
+
+```sh
+cargo build --release
+```
+
+Validate the manifest of the current project:
+
+```sh
+enozunu validate
+```
+
+Resolve declared sources and materialize them into Claude project paths:
+
+```sh
+enozunu materialize
+```
+
+Both commands read `enozunu.consumer.kdl` in the project root by default.
+Use `--manifest` and `--project-root` to override the defaults.
 
 ## File Format Policy
 

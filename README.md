@@ -2,8 +2,7 @@
 
 Enozunu is a cross-provider configuration materializer for AI agent tooling.
 
-It centralizes human-authored definitions of AI-agent configuration sources
-and materializes them into target AI-native configuration paths.
+It centralizes human-authored definitions of AI-agent configuration sources and materializes them into target AI-native configuration paths.
 
 ## Status
 
@@ -16,8 +15,7 @@ The current v0.0.x goal is intentionally narrow:
 - treat generated target AI-native directories as output
 - record materialization provenance in `.enozunu/provenance.json`
 
-v0.0.x focuses on centralized definitions,
-not exact reproducibility.
+v0.0.x focuses on centralized definitions, not exact reproducibility.
 
 ## What Enozunu Does
 
@@ -59,17 +57,14 @@ enozunu config-version=1 {
 
 ## What Enozunu Does Not Do
 
-Enozunu does not reimplement Claude, Codex,
-or any other target AI-native plugin manager.
+Enozunu does not reimplement Claude, Codex, or any other target AI-native plugin manager.
 
 Enozunu does not validate whether a source was originally created for Claude.
 It validates artifact shape and materializes it.
 Whether a reused Skill or agent behaves as expected in a target AI
 is outside Enozunu's guarantee.
 
-Enozunu also does not try to reconcile generated output with manual edits.
-If a target AI-native directory needs to be hand-maintained,
-manage it directly instead of treating it as Enozunu-generated output.
+Enozunu also does not try to reconcile generated output with manual edits. If a target AI-native directory needs to be hand-maintained, manage it directly instead of treating it as Enozunu-generated output.
 
 ## File Format Policy
 

@@ -3,19 +3,13 @@
 Enozunu centralizes declarations.
 It does not own runtime meaning.
 
-The project exists to make AI-agent configuration sources explicit,
-shareable,
-and materializable across projects without committing generated target AI-native directories everywhere.
+The project exists to make AI-agent configuration sources explicit, shareable, and materializable across projects without committing generated target AI-native directories everywhere.
 
 ## Configuration Materialization, Not Plugin Management
 
 Enozunu does not reimplement target AI-native plugin managers.
 
-Claude, Codex,
-and other target AIs may have their own official plugin,
-skill,
-agent,
-or configuration systems.
+Claude, Codex, and other target AIs may have their own official plugin, skill, agent, or configuration systems.
 Enozunu treats those systems as target formats.
 It does not replace them.
 
@@ -55,12 +49,7 @@ but whether it works as expected in another target AI is the user's responsibili
 
 Enozunu-managed target AI-native directories are generated output.
 
-For v0.0.x,
-`.claude/` may be generated from `enozunu.consumer.kdl`.
-Manual edits inside generated output are not treated as source of truth.
-Enozunu does not try to preserve,
-detect,
-or merge manual edits in generated output.
+For v0.0.x, `.claude/` may be generated from `enozunu.consumer.kdl`. Manual edits inside generated output are not treated as source of truth. Enozunu does not try to preserve, detect, or merge manual edits in generated output.
 
 If manual editing is required,
 manage the target AI-native directory directly,
@@ -93,8 +82,4 @@ This makes early dogfooding easier while Skill and agent sources change frequent
 Branch selectors are mutable.
 Therefore v0.0.x does not guarantee exact reproducibility.
 
-At materialization time,
-Enozunu records the resolved commit in `.enozunu/provenance.json`.
-That record is provenance,
-not a lockfile.
-Exact revision selectors and reproducibility guarantees are future work.
+At materialization time, Enozunu records the resolved commit in `.enozunu/provenance.json`. That record is provenance, not a lockfile. Exact revision selectors and reproducibility guarantees are future work.

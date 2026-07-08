@@ -17,18 +17,13 @@ Examples:
 - you want target AI-native configuration to be regenerated from a manifest
 - you want to track what source revision was materialized
 
-For v0.0.x,
-this means declaring sources in `enozunu.consumer.kdl`
-and materializing them into Claude project paths.
+For v0.0.x, this means declaring sources in `enozunu.consumer.kdl` and materializing them into Claude project paths.
 
 ## Do Not Use Enozunu When
 
 Do not use Enozunu when you want a target AI-native plugin manager.
 
-Enozunu does not install,
-resolve,
-or execute target AI plugins as a runtime.
-It materializes configuration files.
+Enozunu does not install, resolve, or execute target AI plugins as a runtime. It materializes configuration files.
 
 Do not use Enozunu when you want runtime compatibility guarantees.
 
@@ -40,9 +35,7 @@ but compatibility is the user's responsibility.
 Do not use Enozunu when you want manual edits inside generated output
 to be preserved or merged.
 
-Generated output is regenerated from declarations.
-If `.claude/` needs to be hand-maintained,
-make it explicit Git-managed project configuration instead of treating it as Enozunu output.
+Generated output is regenerated from declarations. If `.claude/` needs to be hand-maintained, make it explicit Git-managed project configuration instead of treating it as Enozunu output.
 
 ## Not a Good Fit for v0.0.x
 

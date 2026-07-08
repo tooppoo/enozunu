@@ -2,8 +2,7 @@
 
 Enozunu-managed target AI-native directories are generated output.
 
-For v0.0.x,
-this primarily means `.claude/`.
+For v0.0.x, this primarily means `.claude/`.
 
 ## Source of Truth
 
@@ -15,9 +14,7 @@ enozunu.consumer.kdl
 
 The generated target AI-native output is not source of truth.
 
-For v0.0.x,
-`enozunu.consumer.kdl` is human-authored KDL.
-`provenance.json` is machine-generated JSON.
+For v0.0.x, `enozunu.consumer.kdl` is human-authored KDL. `provenance.json` is machine-generated JSON.
 
 ```text
 enozunu.consumer.kdl        # human-authored configuration
@@ -69,18 +66,15 @@ When a Skill source is materialized to:
 
 that target directory should reflect the source directory.
 
-If a supporting file is removed from the source,
-it should also be removed from the target after regeneration.
+If a supporting file is removed from the source, it should also be removed from the target after regeneration.
 
 This avoids stale files remaining in generated output.
 
 ## Manual Edits
 
-Enozunu does not aim to support both declarative management and manual edits
-inside generated output.
+Enozunu does not aim to support both declarative management and manual edits inside generated output.
 
-If generated output is edited by hand,
-Enozunu does not promise to:
+If generated output is edited by hand, Enozunu does not promise to:
 
 - preserve that edit
 - detect that edit
@@ -112,9 +106,7 @@ It should include information such as:
 `provenance.json` is not a lockfile.
 It is not used as a resolution input in v0.0.x.
 
-Because v0.0.x supports branch selectors,
-materializing the same manifest at different times may produce different results.
-The provenance record exists to make the previous result inspectable.
+Because v0.0.x supports branch selectors, materializing the same manifest at different times may produce different results. The provenance record exists to make the previous result inspectable.
 
 ## Out of Scope
 

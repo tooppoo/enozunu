@@ -7,20 +7,13 @@ and target materialization choices under `consumer`.
 
 ## Terminology
 
-`provider` means the source definition side inside the Enozunu manifest.
-It does not mean Claude,
-Codex,
-or any other target AI.
+`provider` means the source definition side inside the Enozunu manifest. It does not mean Claude, Codex, or any other target AI.
 
 `consumer` means the target materialization side inside the Enozunu manifest.
 
-`target AI` means an AI agent tooling system that reads generated configuration.
-For v0.0.x,
-the only target AI is Claude.
+`target AI` means an AI agent tooling system that reads generated configuration. For v0.0.x, the only target AI is Claude.
 
-`target AI-native` means the target AI's native format,
-path,
-or configuration layout.
+`target AI-native` means the target AI's native format, path, or configuration layout.
 
 ## Root
 
@@ -100,16 +93,13 @@ branch
 path
 ```
 
-An agent source must resolve to a file.
-For v0.0.x,
-that file is materialized into `.claude/agents/<name>.md`.
+An agent source must resolve to a file. For v0.0.x, that file is materialized into `.claude/agents/<name>.md`.
 
 ## Consumer Block
 
 The `consumer` block declares what to materialize for each target AI.
 
-For v0.0.x,
-only `consumer.claude` is supported.
+For v0.0.x, only `consumer.claude` is supported.
 
 ```kdl
 consumer {
@@ -173,8 +163,7 @@ latest selector
 version range
 ```
 
-For v0.0.x,
-source references must use the normalized form:
+For v0.0.x, source references must use the normalized form:
 
 ```text
 git + branch + path

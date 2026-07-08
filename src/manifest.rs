@@ -273,6 +273,27 @@ fn parse_source_reference(
     let branch = branch.unwrap();
     let path = path.unwrap();
 
+    // Manifest values reach the external git command as arguments.
+    // A leading `-` would let git parse a value as an option (for example `--upload-pack=<command>`), so such values are rejected as configuration errors.
+    for (field, value) in [("git", &git_url), ("branch", &branch)] {
+        if value.starts_with('-') {
+            diags.push(Diagnostic::new(
+                DiagnosticCode::ManifestShape,
+                format!(
+                    "`{field}` of {kind} `{name}` must not start with `-`; it would be interpreted as a git option"
+                ),
+            ));
+            return None;
+        }
+    }
+    if branch.is_empty() {
+        diags.push(Diagnostic::new(
+            DiagnosticCode::ManifestShape,
+            format!("`branch` of {kind} `{name}` must not be empty"),
+        ));
+        return None;
+    }
+
     if is_github_tree_blob_shorthand(&git_url) {
         diags.push(Diagnostic::new(
             DiagnosticCode::UnsupportedSourceReference,
@@ -612,6 +633,36 @@ enozunu config-version=1 {
 }
 "#;
         assert!(codes(parse(text)).contains(&DiagnosticCode::InvalidName));
+    }
+
+    #[test]
+    fn rejects_branch_that_looks_like_a_git_option() {
+        let text = r#"
+enozunu config-version=1 {
+  provider {
+    skills {
+      skill "a" { git "https://example.com/r"; branch "--upload-pack=evil"; path "p" }
+    }
+  }
+  consumer { claude { use-skills "a" } }
+}
+"#;
+        assert!(codes(parse(text)).contains(&DiagnosticCode::ManifestShape));
+    }
+
+    #[test]
+    fn rejects_git_url_that_looks_like_a_git_option() {
+        let text = r#"
+enozunu config-version=1 {
+  provider {
+    skills {
+      skill "a" { git "--upload-pack=evil"; branch "main"; path "p" }
+    }
+  }
+  consumer { claude { use-skills "a" } }
+}
+"#;
+        assert!(codes(parse(text)).contains(&DiagnosticCode::ManifestShape));
     }
 
     #[test]

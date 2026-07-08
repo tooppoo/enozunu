@@ -34,10 +34,12 @@ impl CommandGitResolver {
         }
     }
 
-    fn cache_dir(&self, url: &str) -> PathBuf {
-        // The readable prefix aids debugging; the hash disambiguates URLs that sanitize to the same prefix.
+    // The cache key must include the branch: each (url, branch) pair keeps its own checkout, and a shared checkout would let the last resolved branch silently overwrite content another `ResolvedSource` still points at.
+    fn cache_dir(&self, url: &str, branch: &str) -> PathBuf {
+        // The readable prefix aids debugging; the hash disambiguates keys that sanitize to the same prefix.
         let mut hasher = DefaultHasher::new();
         url.hash(&mut hasher);
+        branch.hash(&mut hasher);
         let sanitized: String = url
             .chars()
             .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
@@ -58,12 +60,13 @@ impl CommandGitResolver {
 
 impl GitResolver for CommandGitResolver {
     fn resolve(&self, url: &str, branch: &str) -> Result<ResolvedSource, Diagnostic> {
-        let dir = self.cache_dir(url);
+        let dir = self.cache_dir(url, branch);
 
         if dir.join(".git").exists() {
+            // `--` keeps a hostile branch value from being parsed as a git option; validation also rejects leading `-`, and this guards the subprocess boundary directly.
             run_git(
                 &dir,
-                &["fetch", "--quiet", "--depth", "1", "origin", branch],
+                &["fetch", "--quiet", "--depth", "1", "origin", "--", branch],
                 url,
             )?;
             run_git(

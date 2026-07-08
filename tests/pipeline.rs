@@ -284,6 +284,75 @@ enozunu config-version=1 {{
 }
 
 #[test]
+fn materializes_two_branches_of_the_same_repository_independently() {
+    let project = setup();
+
+    // A second branch with different agent content; the pipeline must keep per-branch checkouts apart.
+    git(
+        &project.source_repo,
+        &["checkout", "--quiet", "-b", "other"],
+    );
+    fs::write(
+        project.source_repo.join("agents/demo-agent.md"),
+        "# demo agent on other\n",
+    )
+    .unwrap();
+    commit_all(&project.source_repo, "change agent on other");
+    git(&project.source_repo, &["checkout", "--quiet", "main"]);
+
+    let url = format!("file://{}", project.source_repo.display());
+    let manifest = format!(
+        r#"
+enozunu config-version=1 {{
+  provider {{
+    agents {{
+      agent "agent-main" {{
+        git "{url}"
+        branch "main"
+        path "agents/demo-agent.md"
+      }}
+      agent "agent-other" {{
+        git "{url}"
+        branch "other"
+        path "agents/demo-agent.md"
+      }}
+    }}
+  }}
+  consumer {{
+    claude {{
+      use-agents "agent-main" "agent-other"
+    }}
+  }}
+}}
+"#
+    );
+    fs::write(project.root.join("enozunu.consumer.kdl"), manifest).unwrap();
+
+    materialize(&project).unwrap();
+
+    let main_agent = fs::read_to_string(project.root.join(".claude/agents/agent-main.md")).unwrap();
+    let other_agent =
+        fs::read_to_string(project.root.join(".claude/agents/agent-other.md")).unwrap();
+    assert_eq!(main_agent, "# demo agent\n");
+    assert_eq!(other_agent, "# demo agent on other\n");
+
+    let rev = |branch: &str| {
+        let out = Command::new("git")
+            .arg("-C")
+            .arg(&project.source_repo)
+            .args(["rev-parse", branch])
+            .output()
+            .unwrap();
+        String::from_utf8_lossy(&out.stdout).trim().to_owned()
+    };
+    let text = fs::read_to_string(project.root.join(".enozunu/provenance.json")).unwrap();
+    let record: serde_json::Value = serde_json::from_str(&text).unwrap();
+    let entries = record["entries"].as_array().unwrap();
+    assert_eq!(entries[0]["resolved_revision"], rev("main").as_str());
+    assert_eq!(entries[1]["resolved_revision"], rev("other").as_str());
+}
+
+#[test]
 fn follows_branch_updates_across_runs() {
     let project = setup();
     write_manifest(&project);

@@ -1,7 +1,7 @@
 {
-  "name": "template-dev",
+  "name": "enozunu-dev",
   "image": "mcr.microsoft.com/devcontainers/base:2.1.9-trixie",
-  "workspaceFolder": "/workspaces/fizz",
+  "workspaceFolder": "/workspaces/enozunu",
   "remoteUser": "vscode",
   "runArgs": [
     "--init"

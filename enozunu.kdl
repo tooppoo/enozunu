@@ -1,0 +1,33 @@
+// Enozunu manifest.
+enozunu config-version=1 {
+  provider {
+    skills {
+      skill "subagent-review-loop" {
+        git "https://github.com/tooppoo/catalog-agent-tools"
+        branch "main"
+        path "common/skills/subagent-review-loop"
+      }
+
+      skill "documentation-writing" {
+        git "https://github.com/tooppoo/catalog-agent-tools"
+        branch "main"
+        path "common/skills/documentation-writing"
+      }
+    }
+
+    // agents {
+    //   agent "example-agent" {
+    //     git "https://github.com/your-org/your-agents-repo"
+    //     branch "main"
+    //     path "path/to/agents/example-agent.md"
+    //   }
+    // }
+  }
+
+  // `consumer` selects what to materialize for each target AI.
+  consumer {
+    claude {
+      use-skills "documentation-writing" "subagent-review-loop"
+    }
+  }
+}

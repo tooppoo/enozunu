@@ -1,0 +1,25 @@
+{
+  "version": 1,
+  "entries": [
+    {
+      "source_name": "documentation-writing",
+      "kind": "skill",
+      "source_url": "https://github.com/tooppoo/catalog-agent-tools",
+      "branch": "main",
+      "resolved_revision": "32ac4fb318cdb9cf7f4cda790990a7acfde8bb62",
+      "source_path": "common/skills/documentation-writing",
+      "target_ai": "claude",
+      "target_path": ".claude/skills/documentation-writing"
+    },
+    {
+      "source_name": "subagent-review-loop",
+      "kind": "skill",
+      "source_url": "https://github.com/tooppoo/catalog-agent-tools",
+      "branch": "main",
+      "resolved_revision": "32ac4fb318cdb9cf7f4cda790990a7acfde8bb62",
+      "source_path": "common/skills/subagent-review-loop",
+      "target_ai": "claude",
+      "target_path": ".claude/skills/subagent-review-loop"
+    }
+  ]
+}

@@ -19,7 +19,8 @@
         "EditorConfig.EditorConfig",
         "skellock.just",
         "rust-lang.rust-analyzer",
-        "tamasfe.even-better-toml"
+        "tamasfe.even-better-toml",
+        "kdl-org.kdl"
       ],
       "settings": {
         "editor.formatOnSave": true,

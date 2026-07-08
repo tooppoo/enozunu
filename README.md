@@ -10,7 +10,7 @@ Enozunu is in early design.
 
 The current v0.0.x goal is intentionally narrow:
 
-- define AI-agent configuration sources in `enozunu.consumer.kdl`
+- define AI-agent configuration sources in `enozunu.kdl`
 - materialize selected sources into Claude-native project paths
 - treat generated target AI-native directories as output
 - record materialization provenance in `.enozunu/provenance.json`
@@ -81,10 +81,10 @@ enozunu validate
 Resolve declared sources and materialize them into Claude project paths:
 
 ```sh
-enozunu materialize
+enozunu summon
 ```
 
-Both commands read `enozunu.consumer.kdl` in the project root by default.
+Both commands read `enozunu.kdl` in the project root by default.
 Use `--manifest` and `--project-root` to override the defaults.
 
 ## File Format Policy
@@ -93,7 +93,7 @@ Human-authored configuration uses KDL.
 Machine-generated records use JSON.
 
 ```text
-enozunu.consumer.kdl        # human-authored configuration
+enozunu.kdl                 # human-authored configuration
 .enozunu/provenance.json    # machine-generated derived record
 ```
 

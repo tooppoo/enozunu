@@ -17,7 +17,7 @@ use git::{GitResolver, ResolvedSource};
 use plan::PlannedMaterialization;
 use provenance::{ProvenanceEntry, ProvenanceRecord};
 
-pub const MANIFEST_FILE_NAME: &str = "enozunu.consumer.kdl";
+pub const MANIFEST_FILE_NAME: &str = "enozunu.kdl";
 pub const PROVENANCE_VERSION: u32 = 1;
 
 /// The outcome of one materialized entry, reported back to the CLI.

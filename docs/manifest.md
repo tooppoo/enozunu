@@ -1,6 +1,6 @@
 # Manifest Format
 
-`enozunu.consumer.kdl` is the human-authored configuration file for a project.
+`enozunu.kdl` is the human-authored configuration file for a project.
 
 It declares source definitions under `provider`
 and target materialization choices under `consumer`.

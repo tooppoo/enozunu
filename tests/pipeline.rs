@@ -90,13 +90,13 @@ enozunu config-version=1 {{
 }}
 "#
     );
-    fs::write(project.root.join("enozunu.consumer.kdl"), manifest).unwrap();
+    fs::write(project.root.join("enozunu.kdl"), manifest).unwrap();
 }
 
 fn materialize(project: &TestProject) -> Result<(), Vec<enozunu::diagnostics::Diagnostic>> {
     let resolver = CommandGitResolver::new(project.root.join(".enozunu/cache"));
     enozunu::run_materialize(
-        &project.root.join("enozunu.consumer.kdl"),
+        &project.root.join("enozunu.kdl"),
         &project.root,
         &resolver,
     )
@@ -243,7 +243,7 @@ enozunu config-version=1 {{
 }}
 "#
     );
-    fs::write(project.root.join("enozunu.consumer.kdl"), manifest).unwrap();
+    fs::write(project.root.join("enozunu.kdl"), manifest).unwrap();
 
     let diags = materialize(&project).unwrap_err();
     assert!(diags
@@ -275,7 +275,7 @@ enozunu config-version=1 {{
 }}
 "#
     );
-    fs::write(project.root.join("enozunu.consumer.kdl"), manifest).unwrap();
+    fs::write(project.root.join("enozunu.kdl"), manifest).unwrap();
 
     let diags = materialize(&project).unwrap_err();
     assert!(diags
@@ -326,7 +326,7 @@ enozunu config-version=1 {{
 }}
 "#
     );
-    fs::write(project.root.join("enozunu.consumer.kdl"), manifest).unwrap();
+    fs::write(project.root.join("enozunu.kdl"), manifest).unwrap();
 
     materialize(&project).unwrap();
 

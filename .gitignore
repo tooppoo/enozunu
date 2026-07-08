@@ -1,6 +1,9 @@
 # Rust build outputs
 /target
 
+# test
+cov.json
+
 # other
 *.lock
 *.local.json

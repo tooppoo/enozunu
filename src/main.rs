@@ -3,9 +3,9 @@ use std::process::ExitCode;
 
 use clap::{Parser, Subcommand};
 
+use enozunu::MANIFEST_FILE_NAME;
 use enozunu::diagnostics::Diagnostic;
 use enozunu::git::CommandGitResolver;
-use enozunu::MANIFEST_FILE_NAME;
 
 #[derive(Parser)]
 #[command(

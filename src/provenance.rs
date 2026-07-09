@@ -54,3 +54,56 @@ pub fn write(project_root: &Path, record: &ProvenanceRecord) -> Result<(), Diagn
         )
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sample_record() -> ProvenanceRecord {
+        ProvenanceRecord {
+            version: 1,
+            entries: vec![ProvenanceEntry {
+                source_name: "demo".to_owned(),
+                kind: "skill".to_owned(),
+                source_url: "https://example.com/repo".to_owned(),
+                branch: "main".to_owned(),
+                resolved_revision: "abc123".to_owned(),
+                source_path: "skills/demo".to_owned(),
+                target_ai: "claude".to_owned(),
+                target_path: ".claude/skills/demo".to_owned(),
+            }],
+        }
+    }
+
+    #[test]
+    fn write_creates_the_record_under_a_missing_directory() {
+        let tmp = tempfile::tempdir().unwrap();
+        write(tmp.path(), &sample_record()).unwrap();
+
+        let written = fs::read_to_string(tmp.path().join(PROVENANCE_REL_PATH)).unwrap();
+        assert!(written.ends_with("\n"));
+        assert!(written.contains("\"resolved_revision\": \"abc123\""));
+        assert!(written.contains("\"target_path\": \".claude/skills/demo\""));
+    }
+
+    #[test]
+    fn write_reports_io_failure_when_the_parent_is_a_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        // Put a regular file where the `.enozunu` directory would go, so create_dir_all fails.
+        fs::write(tmp.path().join(".enozunu"), "not a directory").unwrap();
+
+        let diag = write(tmp.path(), &sample_record()).unwrap_err();
+        assert_eq!(diag.code, DiagnosticCode::Io);
+    }
+
+    #[test]
+    fn write_reports_io_failure_when_the_target_is_a_directory() {
+        let tmp = tempfile::tempdir().unwrap();
+        // Occupy the record path with a directory so the final file write fails
+        // even though its parent directory is created successfully.
+        fs::create_dir_all(tmp.path().join(PROVENANCE_REL_PATH)).unwrap();
+
+        let diag = write(tmp.path(), &sample_record()).unwrap_err();
+        assert_eq!(diag.code, DiagnosticCode::Io);
+    }
+}

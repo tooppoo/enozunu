@@ -1,0 +1,21 @@
+/- kdl-version 2
+
+rellog config-version=1 {
+  paths {
+    changelog "CHANGELOG.md"
+    entries ".rellog/entries"
+    release-notes ".rellog/release-notes"
+  }
+
+  entries {
+    kinds {
+      kind "added"
+      kind "changed"
+      kind "fixed"
+    }
+
+    targets {
+      target "app"
+    }
+  }
+}

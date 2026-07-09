@@ -23,12 +23,25 @@ pub struct ProvenanceRecord {
 pub struct ProvenanceEntry {
     pub source_name: String,
     pub kind: String,
-    pub source_url: String,
-    pub branch: String,
-    pub resolved_revision: String,
-    pub source_path: String,
+    pub source: ProvenanceSource,
     pub target_ai: String,
     pub target_path: String,
+}
+
+/// Source-kind-specific provenance fields, tagged so consumers can dispatch on `type` instead of probing for Git-only fields.
+#[derive(Debug, Serialize)]
+#[serde(tag = "type", rename_all = "lowercase")]
+pub enum ProvenanceSource {
+    Git {
+        url: String,
+        branch: String,
+        path: String,
+        resolved_revision: String,
+    },
+    Local {
+        path: String,
+        resolved_path: String,
+    },
 }
 
 pub fn write(project_root: &Path, record: &ProvenanceRecord) -> Result<(), Diagnostic> {
@@ -62,16 +75,30 @@ mod tests {
     fn sample_record() -> ProvenanceRecord {
         ProvenanceRecord {
             version: 1,
-            entries: vec![ProvenanceEntry {
-                source_name: "demo".to_owned(),
-                kind: "skill".to_owned(),
-                source_url: "https://example.com/repo".to_owned(),
-                branch: "main".to_owned(),
-                resolved_revision: "abc123".to_owned(),
-                source_path: "skills/demo".to_owned(),
-                target_ai: "claude".to_owned(),
-                target_path: ".claude/skills/demo".to_owned(),
-            }],
+            entries: vec![
+                ProvenanceEntry {
+                    source_name: "demo".to_owned(),
+                    kind: "skill".to_owned(),
+                    source: ProvenanceSource::Git {
+                        url: "https://example.com/repo".to_owned(),
+                        branch: "main".to_owned(),
+                        path: "skills/demo".to_owned(),
+                        resolved_revision: "abc123".to_owned(),
+                    },
+                    target_ai: "claude".to_owned(),
+                    target_path: ".claude/skills/demo".to_owned(),
+                },
+                ProvenanceEntry {
+                    source_name: "local-demo".to_owned(),
+                    kind: "skill".to_owned(),
+                    source: ProvenanceSource::Local {
+                        path: "../sibling/skills/demo".to_owned(),
+                        resolved_path: "/canonical/sibling/skills/demo".to_owned(),
+                    },
+                    target_ai: "claude".to_owned(),
+                    target_path: ".claude/skills/local-demo".to_owned(),
+                },
+            ],
         }
     }
 
@@ -82,8 +109,19 @@ mod tests {
 
         let written = fs::read_to_string(tmp.path().join(PROVENANCE_REL_PATH)).unwrap();
         assert!(written.ends_with("\n"));
-        assert!(written.contains("\"resolved_revision\": \"abc123\""));
         assert!(written.contains("\"target_path\": \".claude/skills/demo\""));
+
+        // Source fields live under a typed `source` object rather than as Git-specific top-level fields.
+        let record: serde_json::Value = serde_json::from_str(&written).unwrap();
+        let entries = record["entries"].as_array().unwrap();
+        assert_eq!(entries[0]["source"]["type"], "git");
+        assert_eq!(entries[0]["source"]["resolved_revision"], "abc123");
+        assert!(entries[0].get("resolved_revision").is_none());
+        assert_eq!(entries[1]["source"]["type"], "local");
+        assert_eq!(
+            entries[1]["source"]["resolved_path"],
+            "/canonical/sibling/skills/demo"
+        );
     }
 
     #[test]

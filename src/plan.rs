@@ -98,25 +98,33 @@ mod tests {
 enozunu config-version=1 {
   provider {
     skills {
-      skill "used" { git "https://example.com/r"; branch "main"; path "s/used" }
-      skill "unused" { git "https://example.com/r"; branch "main"; path "s/unused" }
+      skill "used" { git { url "https://example.com/r"; branch "main"; path "s/used" } }
+      skill "unused" { git { url "https://example.com/r"; branch "main"; path "s/unused" } }
+      skill "local-used" { local { path "../sibling/s/local-used" } }
     }
     agents {
-      agent "helper" { git "https://example.com/r"; branch "main"; path "a/helper.md" }
+      agent "helper" { git { url "https://example.com/r"; branch "main"; path "a/helper.md" } }
     }
   }
   consumer {
     claude {
-      use-skills "used"
+      use-skills "used" "local-used"
       use-agents "helper"
     }
   }
 }
 "#;
         let planned = plan(&manifest::parse(text).unwrap()).unwrap();
-        assert_eq!(planned.len(), 2);
+        assert_eq!(planned.len(), 3);
         assert_eq!(planned[0].target_rel_path, ".claude/skills/used");
-        assert_eq!(planned[1].target_rel_path, ".claude/agents/helper.md");
+        assert_eq!(planned[1].target_rel_path, ".claude/skills/local-used");
+        assert_eq!(planned[2].target_rel_path, ".claude/agents/helper.md");
+        assert_eq!(
+            planned[1].reference,
+            SourceReference::Local {
+                path: "../sibling/s/local-used".to_owned()
+            }
+        );
     }
 
     #[test]
@@ -125,7 +133,7 @@ enozunu config-version=1 {
 enozunu config-version=1 {
   provider {
     skills {
-      skill "a" { git "https://example.com/r"; branch "main"; path "s/a" }
+      skill "a" { git { url "https://example.com/r"; branch "main"; path "s/a" } }
     }
   }
   consumer {

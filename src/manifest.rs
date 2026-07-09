@@ -30,15 +30,20 @@ pub struct SourceDecl {
     pub reference: SourceReference,
 }
 
-/// The normalized `git` + `branch` + `path` source reference.
+/// A tagged source reference: exactly one `git` or `local` block per source declaration.
 ///
-/// v0.0.x accepts only this shape; shorthand forms are rejected during validation.
+/// v0.0.x accepts only these two kinds; shorthand forms are rejected during validation.
 /// See docs/manifest.md for the supported source reference policy.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct SourceReference {
-    pub git_url: String,
-    pub branch: String,
-    pub path: String,
+pub enum SourceReference {
+    Git {
+        url: String,
+        branch: String,
+        path: String,
+    },
+    Local {
+        path: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -222,7 +227,89 @@ fn parse_source_reference(
     name: &str,
     diags: &mut Vec<Diagnostic>,
 ) -> Option<SourceReference> {
-    let mut git_url = None;
+    let mut git_blocks = Vec::new();
+    let mut local_blocks = Vec::new();
+    let mut ok = true;
+
+    if let Some(children) = node.children() {
+        for block in children.nodes() {
+            match block.name().value() {
+                "git" => git_blocks.push(block),
+                "local" => local_blocks.push(block),
+                // `branch` and `path` were top-level fields before source reference blocks existed, so their appearance here most likely means an unmigrated manifest.
+                other @ ("branch" | "path" | "url") => {
+                    diags.push(Diagnostic::new(
+                        DiagnosticCode::UnsupportedSourceReference,
+                        format!(
+                            "{kind} `{name}` declares `{other}` outside a source reference block; declare it inside a `git` block"
+                        ),
+                    ));
+                    ok = false;
+                }
+                other => {
+                    diags.push(Diagnostic::new(
+                        DiagnosticCode::UnsupportedSourceReference,
+                        format!(
+                            "{kind} `{name}` uses unsupported source reference block `{other}`; supported blocks are `git` and `local`"
+                        ),
+                    ));
+                    ok = false;
+                }
+            }
+        }
+    }
+
+    let reference = match (git_blocks.as_slice(), local_blocks.as_slice()) {
+        ([git], []) => parse_git_reference(git, kind, name, diags),
+        ([], [local]) => parse_local_reference(local, kind, name, diags),
+        ([], []) => {
+            diags.push(Diagnostic::new(
+                DiagnosticCode::ManifestShape,
+                format!(
+                    "{kind} `{name}` must contain exactly one source reference block (`git` or `local`)"
+                ),
+            ));
+            None
+        }
+        (git, local) => {
+            let found = if !git.is_empty() && !local.is_empty() {
+                "both `git` and `local` blocks".to_owned()
+            } else if git.len() > 1 {
+                format!("{} `git` blocks", git.len())
+            } else {
+                format!("{} `local` blocks", local.len())
+            };
+            diags.push(Diagnostic::new(
+                DiagnosticCode::ManifestShape,
+                format!(
+                    "{kind} `{name}` declares {found}; exactly one source reference block is allowed"
+                ),
+            ));
+            None
+        }
+    };
+
+    if ok { reference } else { None }
+}
+
+fn parse_git_reference(
+    node: &KdlNode,
+    kind: &str,
+    name: &str,
+    diags: &mut Vec<Diagnostic>,
+) -> Option<SourceReference> {
+    // A positional argument on `git` is the pre-block manifest form (`git "<url>"`), so point at the migration instead of reporting a missing `url`.
+    if first_string_arg(node).is_some() {
+        diags.push(Diagnostic::new(
+            DiagnosticCode::ManifestShape,
+            format!(
+                "`git` block of {kind} `{name}` takes no argument; declare `url` inside the block"
+            ),
+        ));
+        return None;
+    }
+
+    let mut url = None;
     let mut branch = None;
     let mut path = None;
     let mut ok = true;
@@ -232,10 +319,10 @@ fn parse_source_reference(
             let field_name = field.name().value();
             let value = first_string_arg(field);
             match (field_name, value) {
-                ("git", Some(v)) => git_url = Some(v),
+                ("url", Some(v)) => url = Some(v),
                 ("branch", Some(v)) => branch = Some(v),
                 ("path", Some(v)) => path = Some(v),
-                ("git" | "branch" | "path", None) => {
+                ("url" | "branch" | "path", None) => {
                     diags.push(Diagnostic::new(
                         DiagnosticCode::ManifestShape,
                         format!("`{field_name}` of {kind} `{name}` must have a string value"),
@@ -246,7 +333,7 @@ fn parse_source_reference(
                     diags.push(Diagnostic::new(
                         DiagnosticCode::UnsupportedSourceReference,
                         format!(
-                            "{kind} `{name}` uses unsupported field `{other}`; v0.0.x accepts only git + branch + path"
+                            "`git` block of {kind} `{name}` uses unsupported field `{other}`; it accepts only url + branch + path"
                         ),
                     ));
                     ok = false;
@@ -255,11 +342,11 @@ fn parse_source_reference(
         }
     }
 
-    for (field, value) in [("git", &git_url), ("branch", &branch), ("path", &path)] {
+    for (field, value) in [("url", &url), ("branch", &branch), ("path", &path)] {
         if value.is_none() {
             diags.push(Diagnostic::new(
                 DiagnosticCode::ManifestShape,
-                format!("{kind} `{name}` is missing required field `{field}`"),
+                format!("`git` block of {kind} `{name}` is missing required field `{field}`"),
             ));
             ok = false;
         }
@@ -269,13 +356,13 @@ fn parse_source_reference(
         return None;
     }
 
-    let git_url = git_url.unwrap();
+    let url = url.unwrap();
     let branch = branch.unwrap();
     let path = path.unwrap();
 
     // Manifest values reach the external git command as arguments.
     // A leading `-` would let git parse a value as an option (for example `--upload-pack=<command>`), so such values are rejected as configuration errors.
-    for (field, value) in [("git", &git_url), ("branch", &branch)] {
+    for (field, value) in [("url", &url), ("branch", &branch)] {
         if value.starts_with('-') {
             diags.push(Diagnostic::new(
                 DiagnosticCode::ManifestShape,
@@ -294,11 +381,11 @@ fn parse_source_reference(
         return None;
     }
 
-    if is_github_tree_blob_shorthand(&git_url) {
+    if is_github_tree_blob_shorthand(&url) {
         diags.push(Diagnostic::new(
             DiagnosticCode::UnsupportedSourceReference,
             format!(
-                "{kind} `{name}` uses a GitHub tree/blob URL shorthand; use the normalized git + branch + path form"
+                "{kind} `{name}` uses a GitHub tree/blob URL shorthand; use the normalized url + branch + path form"
             ),
         ));
         return None;
@@ -309,11 +396,72 @@ fn parse_source_reference(
         return None;
     }
 
-    Some(SourceReference {
-        git_url,
-        branch,
-        path,
-    })
+    Some(SourceReference::Git { url, branch, path })
+}
+
+fn parse_local_reference(
+    node: &KdlNode,
+    kind: &str,
+    name: &str,
+    diags: &mut Vec<Diagnostic>,
+) -> Option<SourceReference> {
+    if first_string_arg(node).is_some() {
+        diags.push(Diagnostic::new(
+            DiagnosticCode::ManifestShape,
+            format!(
+                "`local` block of {kind} `{name}` takes no argument; declare `path` inside the block"
+            ),
+        ));
+        return None;
+    }
+
+    let mut path = None;
+    let mut ok = true;
+
+    if let Some(children) = node.children() {
+        for field in children.nodes() {
+            let field_name = field.name().value();
+            let value = first_string_arg(field);
+            match (field_name, value) {
+                ("path", Some(v)) => path = Some(v),
+                ("path", None) => {
+                    diags.push(Diagnostic::new(
+                        DiagnosticCode::ManifestShape,
+                        format!("`path` of {kind} `{name}` must have a string value"),
+                    ));
+                    ok = false;
+                }
+                (other, _) => {
+                    diags.push(Diagnostic::new(
+                        DiagnosticCode::UnsupportedSourceReference,
+                        format!(
+                            "`local` block of {kind} `{name}` uses unsupported field `{other}`; it accepts only path"
+                        ),
+                    ));
+                    ok = false;
+                }
+            }
+        }
+    }
+
+    let Some(path) = path else {
+        diags.push(Diagnostic::new(
+            DiagnosticCode::ManifestShape,
+            format!("`local` block of {kind} `{name}` is missing required field `path`"),
+        ));
+        return None;
+    };
+
+    if !ok {
+        return None;
+    }
+
+    if let Err(d) = validate_local_source_path(&path, kind, name) {
+        diags.push(d);
+        return None;
+    }
+
+    Some(SourceReference::Local { path })
 }
 
 fn parse_consumer(node: &KdlNode, diags: &mut Vec<Diagnostic>) -> Consumer {
@@ -405,6 +553,28 @@ fn validate_name(name: &str, kind: &str) -> Result<(), Diagnostic> {
     }
 }
 
+/// Local paths resolve from the manifest directory, so `..` segments are allowed for sibling repositories.
+/// Absolute paths are a portability hazard in a shared manifest, so v0.0.x rejects them until support is decided explicitly.
+fn validate_local_source_path(path: &str, kind: &str, name: &str) -> Result<(), Diagnostic> {
+    if path.starts_with('/') {
+        return Err(Diagnostic::new(
+            DiagnosticCode::UnsupportedSourceReference,
+            format!(
+                "{kind} `{name}` local path `{path}` is absolute; v0.0.x accepts only paths relative to the manifest directory"
+            ),
+        ));
+    }
+    if path.is_empty() || path.split('/').any(|seg| seg.is_empty()) {
+        return Err(Diagnostic::new(
+            DiagnosticCode::ManifestShape,
+            format!(
+                "{kind} `{name}` local path `{path}` must be a non-empty relative path without empty segments"
+            ),
+        ));
+    }
+    Ok(())
+}
+
 /// Dot segments are rejected rather than normalized so that path containment does not depend on host-specific normalization.
 fn validate_source_path(path: &str, kind: &str, name: &str) -> Result<(), Diagnostic> {
     let invalid = path.is_empty()
@@ -467,24 +637,34 @@ enozunu config-version=1 {
   provider {
     skills {
       skill "git-kura" {
-        git "https://github.com/tooppoo/reportage"
-        branch "main"
-        path ".claude/skills/git-kura"
+        git {
+          url "https://github.com/tooppoo/reportage"
+          branch "main"
+          path ".claude/skills/git-kura"
+        }
+      }
+
+      skill "local-git-kura" {
+        local {
+          path "../reportage/.claude/skills/git-kura"
+        }
       }
     }
 
     agents {
       agent "shell-script-reviewer" {
-        git "https://github.com/tooppoo/installerer"
-        branch "main"
-        path ".claude/agents/shell-script-reviewer.md"
+        git {
+          url "https://github.com/tooppoo/installerer"
+          branch "main"
+          path ".claude/agents/shell-script-reviewer.md"
+        }
       }
     }
   }
 
   consumer {
     claude {
-      use-skills "git-kura"
+      use-skills "git-kura" "local-git-kura"
       use-agents "shell-script-reviewer"
     }
   }
@@ -498,12 +678,25 @@ enozunu config-version=1 {
     #[test]
     fn parses_valid_manifest() {
         let manifest = parse(VALID).unwrap();
-        assert_eq!(manifest.provider.skills.len(), 1);
+        assert_eq!(manifest.provider.skills.len(), 2);
         assert_eq!(manifest.provider.agents.len(), 1);
-        assert_eq!(manifest.consumer.claude.use_skills, ["git-kura"]);
         assert_eq!(
-            manifest.provider.skills[0].reference.path,
-            ".claude/skills/git-kura"
+            manifest.consumer.claude.use_skills,
+            ["git-kura", "local-git-kura"]
+        );
+        assert_eq!(
+            manifest.provider.skills[0].reference,
+            SourceReference::Git {
+                url: "https://github.com/tooppoo/reportage".to_owned(),
+                branch: "main".to_owned(),
+                path: ".claude/skills/git-kura".to_owned(),
+            }
+        );
+        assert_eq!(
+            manifest.provider.skills[1].reference,
+            SourceReference::Local {
+                path: "../reportage/.claude/skills/git-kura".to_owned(),
+            }
         );
     }
 
@@ -546,8 +739,8 @@ enozunu config-version=1 {
 enozunu config-version=1 {
   provider {
     skills {
-      skill "a" { git "https://example.com/r"; branch "main"; path "p" }
-      skill "a" { git "https://example.com/r"; branch "main"; path "q" }
+      skill "a" { git { url "https://example.com/r"; branch "main"; path "p" } }
+      skill "a" { git { url "https://example.com/r"; branch "main"; path "q" } }
     }
   }
   consumer { claude {} }
@@ -577,9 +770,11 @@ enozunu config-version=1 {
   provider {
     skills {
       skill "a" {
-        git "https://github.com/owner/repo/tree/main/path"
-        branch "main"
-        path "p"
+        git {
+          url "https://github.com/owner/repo/tree/main/path"
+          branch "main"
+          path "p"
+        }
       }
     }
   }
@@ -590,12 +785,12 @@ enozunu config-version=1 {
     }
 
     #[test]
-    fn rejects_missing_reference_fields() {
+    fn rejects_missing_git_reference_fields() {
         let text = r#"
 enozunu config-version=1 {
   provider {
     skills {
-      skill "a" { git "https://example.com/r" }
+      skill "a" { git { url "https://example.com/r" } }
     }
   }
   consumer { claude {} }
@@ -612,12 +807,118 @@ enozunu config-version=1 {
     }
 
     #[test]
-    fn rejects_traversal_source_path() {
+    fn rejects_source_without_reference_block() {
         let text = r#"
 enozunu config-version=1 {
   provider {
     skills {
-      skill "a" { git "https://example.com/r"; branch "main"; path "../escape" }
+      skill "a" {}
+    }
+  }
+  consumer { claude {} }
+}
+"#;
+        assert!(codes(parse(text)).contains(&DiagnosticCode::ManifestShape));
+    }
+
+    #[test]
+    fn rejects_source_with_both_git_and_local() {
+        let text = r#"
+enozunu config-version=1 {
+  provider {
+    skills {
+      skill "a" {
+        git { url "https://example.com/r"; branch "main"; path "p" }
+        local { path "../p" }
+      }
+    }
+  }
+  consumer { claude {} }
+}
+"#;
+        assert!(codes(parse(text)).contains(&DiagnosticCode::ManifestShape));
+    }
+
+    #[test]
+    fn rejects_source_with_multiple_git_blocks() {
+        let text = r#"
+enozunu config-version=1 {
+  provider {
+    skills {
+      skill "a" {
+        git { url "https://example.com/r"; branch "main"; path "p" }
+        git { url "https://example.com/r"; branch "main"; path "q" }
+      }
+    }
+  }
+  consumer { claude {} }
+}
+"#;
+        assert!(codes(parse(text)).contains(&DiagnosticCode::ManifestShape));
+    }
+
+    #[test]
+    fn rejects_source_with_multiple_local_blocks() {
+        let text = r#"
+enozunu config-version=1 {
+  provider {
+    skills {
+      skill "a" {
+        local { path "../p" }
+        local { path "../q" }
+      }
+    }
+  }
+  consumer { claude {} }
+}
+"#;
+        assert!(codes(parse(text)).contains(&DiagnosticCode::ManifestShape));
+    }
+
+    #[test]
+    fn rejects_unsupported_source_reference_block() {
+        let text = r#"
+enozunu config-version=1 {
+  provider {
+    skills {
+      skill "a" { svn { path "p" } }
+    }
+  }
+  consumer { claude {} }
+}
+"#;
+        assert!(codes(parse(text)).contains(&DiagnosticCode::UnsupportedSourceReference));
+    }
+
+    #[test]
+    fn rejects_pre_block_flat_reference_form() {
+        let text = r#"
+enozunu config-version=1 {
+  provider {
+    skills {
+      skill "a" {
+        git "https://example.com/r"
+        branch "main"
+        path "p"
+      }
+    }
+  }
+  consumer { claude {} }
+}
+"#;
+        let codes = codes(parse(text));
+        // `branch` and `path` outside a block are reported as unsupported, and the argument-carrying `git` node as a shape error.
+        assert!(codes.contains(&DiagnosticCode::UnsupportedSourceReference));
+        assert!(codes.contains(&DiagnosticCode::ManifestShape));
+    }
+
+    #[test]
+    fn rejects_traversal_git_source_path() {
+        let text = r#"
+enozunu config-version=1 {
+  provider {
+    skills {
+      skill "a" { git { url "https://example.com/r"; branch "main"; path "../escape" } }
     }
   }
   consumer { claude {} }
@@ -632,7 +933,7 @@ enozunu config-version=1 {
 enozunu config-version=1 {
   provider {
     skills {
-      skill "../evil" { git "https://example.com/r"; branch "main"; path "p" }
+      skill "../evil" { git { url "https://example.com/r"; branch "main"; path "p" } }
     }
   }
   consumer { claude {} }
@@ -647,7 +948,7 @@ enozunu config-version=1 {
 enozunu config-version=1 {
   provider {
     skills {
-      skill "a" { git "https://example.com/r"; branch "--upload-pack=evil"; path "p" }
+      skill "a" { git { url "https://example.com/r"; branch "--upload-pack=evil"; path "p" } }
     }
   }
   consumer { claude { use-skills "a" } }
@@ -662,7 +963,7 @@ enozunu config-version=1 {
 enozunu config-version=1 {
   provider {
     skills {
-      skill "a" { git "--upload-pack=evil"; branch "main"; path "p" }
+      skill "a" { git { url "--upload-pack=evil"; branch "main"; path "p" } }
     }
   }
   consumer { claude { use-skills "a" } }
@@ -677,12 +978,72 @@ enozunu config-version=1 {
 enozunu config-version=1 {
   provider {
     skills {
-      skill "a" { git "https://example.com/r"; branch "main"; path "anywhere/else" }
+      skill "a" { git { url "https://example.com/r"; branch "main"; path "anywhere/else" } }
     }
   }
   consumer { claude { use-skills "a" } }
 }
 "#;
         assert!(parse(text).is_ok());
+    }
+
+    #[test]
+    fn accepts_local_path_with_parent_segments() {
+        let text = r#"
+enozunu config-version=1 {
+  provider {
+    skills {
+      skill "a" { local { path "../../sibling/skills/a" } }
+    }
+  }
+  consumer { claude { use-skills "a" } }
+}
+"#;
+        assert!(parse(text).is_ok());
+    }
+
+    #[test]
+    fn rejects_absolute_local_path() {
+        let text = r#"
+enozunu config-version=1 {
+  provider {
+    skills {
+      skill "a" { local { path "/etc/skills/a" } }
+    }
+  }
+  consumer { claude { use-skills "a" } }
+}
+"#;
+        assert!(codes(parse(text)).contains(&DiagnosticCode::UnsupportedSourceReference));
+    }
+
+    #[test]
+    fn rejects_local_block_missing_path() {
+        let text = r#"
+enozunu config-version=1 {
+  provider {
+    skills {
+      skill "a" { local {} }
+    }
+  }
+  consumer { claude {} }
+}
+"#;
+        assert!(codes(parse(text)).contains(&DiagnosticCode::ManifestShape));
+    }
+
+    #[test]
+    fn rejects_unsupported_field_inside_local_block() {
+        let text = r#"
+enozunu config-version=1 {
+  provider {
+    skills {
+      skill "a" { local { path "../p"; branch "main" } }
+    }
+  }
+  consumer { claude {} }
+}
+"#;
+        assert!(codes(parse(text)).contains(&DiagnosticCode::UnsupportedSourceReference));
     }
 }

@@ -68,16 +68,20 @@ enozunu config-version=1 {{
   provider {{
     skills {{
       skill "demo-skill" {{
-        git "{url}"
-        branch "main"
-        path "skills/demo-skill"
+        git {{
+          url "{url}"
+          branch "main"
+          path "skills/demo-skill"
+        }}
       }}
     }}
     agents {{
       agent "demo-agent" {{
-        git "{url}"
-        branch "main"
-        path "agents/demo-agent.md"
+        git {{
+          url "{url}"
+          branch "main"
+          path "agents/demo-agent.md"
+        }}
       }}
     }}
   }}
@@ -90,6 +94,49 @@ enozunu config-version=1 {{
 }}
 "#
     );
+    fs::write(project.root.join("enozunu.kdl"), manifest).unwrap();
+}
+
+/// Creates a local (non-Git) source tree next to the project, containing one skill and one agent.
+fn setup_local_source(project: &TestProject) -> PathBuf {
+    let local_src = project.root.parent().unwrap().join("local-src");
+    let skill_dir = local_src.join("skills/local-skill");
+    fs::create_dir_all(&skill_dir).unwrap();
+    fs::write(skill_dir.join("SKILL.md"), "# local skill\n").unwrap();
+    fs::write(skill_dir.join("helper.txt"), "local helper\n").unwrap();
+    let agent_dir = local_src.join("agents");
+    fs::create_dir_all(&agent_dir).unwrap();
+    fs::write(agent_dir.join("local-agent.md"), "# local agent\n").unwrap();
+    local_src
+}
+
+fn write_local_manifest(project: &TestProject) {
+    let manifest = r#"
+enozunu config-version=1 {
+  provider {
+    skills {
+      skill "local-skill" {
+        local {
+          path "../local-src/skills/local-skill"
+        }
+      }
+    }
+    agents {
+      agent "local-agent" {
+        local {
+          path "../local-src/agents/local-agent.md"
+        }
+      }
+    }
+  }
+  consumer {
+    claude {
+      use-skills "local-skill"
+      use-agents "local-agent"
+    }
+  }
+}
+"#;
     fs::write(project.root.join("enozunu.kdl"), manifest).unwrap();
 }
 
@@ -135,11 +182,13 @@ fn records_provenance_with_resolved_revision() {
     let head = String::from_utf8_lossy(&head.stdout).trim().to_owned();
 
     for entry in entries {
-        assert_eq!(entry["resolved_revision"], head.as_str());
+        assert_eq!(entry["source"]["type"], "git");
+        assert_eq!(entry["source"]["resolved_revision"], head.as_str());
+        assert_eq!(entry["source"]["branch"], "main");
         assert_eq!(entry["target_ai"], "claude");
-        assert_eq!(entry["branch"], "main");
     }
     assert_eq!(entries[0]["kind"], "skill");
+    assert_eq!(entries[0]["source"]["path"], "skills/demo-skill");
     assert_eq!(entries[0]["target_path"], ".claude/skills/demo-skill");
     assert_eq!(entries[1]["kind"], "agent");
     assert_eq!(entries[1]["target_path"], ".claude/agents/demo-agent.md");
@@ -229,9 +278,11 @@ enozunu config-version=1 {{
   provider {{
     skills {{
       skill "missing" {{
-        git "{url}"
-        branch "main"
-        path "skills/does-not-exist"
+        git {{
+          url "{url}"
+          branch "main"
+          path "skills/does-not-exist"
+        }}
       }}
     }}
   }}
@@ -263,9 +314,11 @@ enozunu config-version=1 {{
   provider {{
     agents {{
       agent "demo-agent" {{
-        git "{url}"
-        branch "no-such-branch"
-        path "agents/demo-agent.md"
+        git {{
+          url "{url}"
+          branch "no-such-branch"
+          path "agents/demo-agent.md"
+        }}
       }}
     }}
   }}
@@ -311,14 +364,18 @@ enozunu config-version=1 {{
   provider {{
     agents {{
       agent "agent-main" {{
-        git "{url}"
-        branch "main"
-        path "agents/demo-agent.md"
+        git {{
+          url "{url}"
+          branch "main"
+          path "agents/demo-agent.md"
+        }}
       }}
       agent "agent-other" {{
-        git "{url}"
-        branch "other"
-        path "agents/demo-agent.md"
+        git {{
+          url "{url}"
+          branch "other"
+          path "agents/demo-agent.md"
+        }}
       }}
     }}
   }}
@@ -352,8 +409,211 @@ enozunu config-version=1 {{
     let text = fs::read_to_string(project.root.join(".enozunu/provenance.json")).unwrap();
     let record: serde_json::Value = serde_json::from_str(&text).unwrap();
     let entries = record["entries"].as_array().unwrap();
-    assert_eq!(entries[0]["resolved_revision"], rev("main").as_str());
-    assert_eq!(entries[1]["resolved_revision"], rev("other").as_str());
+    assert_eq!(
+        entries[0]["source"]["resolved_revision"],
+        rev("main").as_str()
+    );
+    assert_eq!(
+        entries[1]["source"]["resolved_revision"],
+        rev("other").as_str()
+    );
+}
+
+#[test]
+fn materializes_local_skill_and_agent_from_a_sibling_directory() {
+    let project = setup();
+    setup_local_source(&project);
+    write_local_manifest(&project);
+
+    materialize(&project).unwrap();
+
+    let skill_md = project.root.join(".claude/skills/local-skill/SKILL.md");
+    let helper = project.root.join(".claude/skills/local-skill/helper.txt");
+    let agent = project.root.join(".claude/agents/local-agent.md");
+    assert_eq!(fs::read_to_string(skill_md).unwrap(), "# local skill\n");
+    assert!(helper.is_file());
+    assert_eq!(fs::read_to_string(agent).unwrap(), "# local agent\n");
+}
+
+#[test]
+fn resolves_local_paths_from_the_manifest_directory_not_the_working_directory() {
+    let project = setup();
+    let local_src = setup_local_source(&project);
+    write_local_manifest(&project);
+
+    // The test process's working directory is unrelated to the project, so `../local-src/...` only resolves if the pipeline anchors it at the manifest directory.
+    assert_ne!(
+        std::env::current_dir().unwrap(),
+        project.root,
+        "test precondition: working directory must differ from the project root"
+    );
+    assert!(local_src.exists());
+
+    materialize(&project).unwrap();
+
+    assert!(
+        project
+            .root
+            .join(".claude/skills/local-skill/SKILL.md")
+            .is_file()
+    );
+}
+
+#[test]
+fn records_local_provenance_with_resolved_path() {
+    let project = setup();
+    let local_src = setup_local_source(&project);
+    write_local_manifest(&project);
+
+    materialize(&project).unwrap();
+
+    let text = fs::read_to_string(project.root.join(".enozunu/provenance.json")).unwrap();
+    let record: serde_json::Value = serde_json::from_str(&text).unwrap();
+    let entries = record["entries"].as_array().unwrap();
+    assert_eq!(entries.len(), 2);
+
+    let skill_source = &entries[0]["source"];
+    assert_eq!(skill_source["type"], "local");
+    assert_eq!(skill_source["path"], "../local-src/skills/local-skill");
+    assert_eq!(
+        skill_source["resolved_path"],
+        local_src
+            .join("skills/local-skill")
+            .canonicalize()
+            .unwrap()
+            .display()
+            .to_string()
+    );
+    assert!(skill_source.get("resolved_revision").is_none());
+    assert_eq!(entries[0]["target_path"], ".claude/skills/local-skill");
+
+    assert_eq!(entries[1]["source"]["type"], "local");
+    assert_eq!(entries[1]["target_path"], ".claude/agents/local-agent.md");
+}
+
+#[test]
+fn rejects_symlinked_local_skill_source_path() {
+    let project = setup();
+    let local_src = setup_local_source(&project);
+    std::os::unix::fs::symlink(
+        local_src.join("skills/local-skill"),
+        local_src.join("skills/linked-skill"),
+    )
+    .unwrap();
+
+    let manifest = r#"
+enozunu config-version=1 {
+  provider {
+    skills {
+      skill "linked-skill" {
+        local {
+          path "../local-src/skills/linked-skill"
+        }
+      }
+    }
+  }
+  consumer {
+    claude {
+      use-skills "linked-skill"
+    }
+  }
+}
+"#;
+    fs::write(project.root.join("enozunu.kdl"), manifest).unwrap();
+
+    let diags = materialize(&project).unwrap_err();
+    assert!(diags.iter().any(|d| d.code == DiagnosticCode::UnsafePath));
+    assert!(!project.root.join(".claude").exists());
+}
+
+#[test]
+fn rejects_local_source_that_overlaps_its_target() {
+    let project = setup();
+    // The source lives at the exact path the materialization would replace.
+    let source = project.root.join(".claude/skills/self-skill");
+    fs::create_dir_all(&source).unwrap();
+    fs::write(source.join("SKILL.md"), "# self\n").unwrap();
+
+    let manifest = r#"
+enozunu config-version=1 {
+  provider {
+    skills {
+      skill "self-skill" {
+        local {
+          path ".claude/skills/self-skill"
+        }
+      }
+    }
+  }
+  consumer {
+    claude {
+      use-skills "self-skill"
+    }
+  }
+}
+"#;
+    fs::write(project.root.join("enozunu.kdl"), manifest).unwrap();
+
+    let diags = materialize(&project).unwrap_err();
+    assert!(diags.iter().any(|d| d.code == DiagnosticCode::UnsafePath));
+    // The overlapping source must survive the rejected run untouched.
+    assert!(source.join("SKILL.md").is_file());
+}
+
+#[test]
+fn materializes_git_and_local_sources_in_one_run() {
+    let project = setup();
+    setup_local_source(&project);
+    let url = format!("file://{}", project.source_repo.display());
+    let manifest = format!(
+        r#"
+enozunu config-version=1 {{
+  provider {{
+    skills {{
+      skill "demo-skill" {{
+        git {{
+          url "{url}"
+          branch "main"
+          path "skills/demo-skill"
+        }}
+      }}
+      skill "local-skill" {{
+        local {{
+          path "../local-src/skills/local-skill"
+        }}
+      }}
+    }}
+  }}
+  consumer {{
+    claude {{
+      use-skills "demo-skill" "local-skill"
+    }}
+  }}
+}}
+"#
+    );
+    fs::write(project.root.join("enozunu.kdl"), manifest).unwrap();
+
+    materialize(&project).unwrap();
+
+    assert!(
+        project
+            .root
+            .join(".claude/skills/demo-skill/SKILL.md")
+            .is_file()
+    );
+    assert!(
+        project
+            .root
+            .join(".claude/skills/local-skill/SKILL.md")
+            .is_file()
+    );
+
+    let text = fs::read_to_string(project.root.join(".enozunu/provenance.json")).unwrap();
+    let record: serde_json::Value = serde_json::from_str(&text).unwrap();
+    let entries = record["entries"].as_array().unwrap();
+    assert_eq!(entries[0]["source"]["type"], "git");
+    assert_eq!(entries[1]["source"]["type"], "local");
 }
 
 #[test]

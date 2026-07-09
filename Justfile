@@ -1,4 +1,5 @@
 import "just/check.just"
+import "just/release.just"
 
 # build the project in development mode
 [group('build')]

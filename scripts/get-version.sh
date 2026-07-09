@@ -14,15 +14,15 @@ fi
 version="$(
   awk '
     BEGIN {
-      in_workspace_package = 0
+      in_package = 0
     }
 
     /^[[:space:]]*\[/ {
-      in_workspace_package = ($0 ~ /^[[:space:]]*\[workspace\.package\][[:space:]]*$/)
+      in_package = ($0 ~ /^[[:space:]]*\[package\][[:space:]]*$/)
       next
     }
 
-    in_workspace_package && /^[[:space:]]*version[[:space:]]*=/ {
+    in_package && /^[[:space:]]*version[[:space:]]*=/ {
       line = $0
 
       sub(/^[[:space:]]*version[[:space:]]*=[[:space:]]*/, "", line)

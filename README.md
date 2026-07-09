@@ -4,6 +4,12 @@ Enozunu is a cross-provider configuration materializer for AI agent tooling.
 
 It centralizes human-authored definitions of AI-agent configuration sources and materializes them into target AI-native configuration paths.
 
+## Quick Start
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/tooppoo/reportage/refs/heads/main/install.sh | sh
+```
+
 ## Status
 
 Enozunu is in early design.
@@ -65,12 +71,6 @@ Whether a reused Skill or agent behaves as expected in a target AI is outside En
 Enozunu also does not try to reconcile generated output with manual edits. If a target AI-native directory needs to be hand-maintained, manage it directly instead of treating it as Enozunu-generated output.
 
 ## Usage
-
-Build the CLI with Cargo:
-
-```sh
-cargo build --release
-```
 
 Create a starter manifest filled with placeholder values:
 

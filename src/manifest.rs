@@ -398,7 +398,9 @@ fn validate_name(name: &str, kind: &str) -> Result<(), Diagnostic> {
     } else {
         Err(Diagnostic::new(
             DiagnosticCode::InvalidName,
-            format!("{kind} name `{name}` must be a single path-safe segment (ASCII letters, digits, `-`, `_`, `.`)"),
+            format!(
+                "{kind} name `{name}` must be a single path-safe segment (ASCII letters, digits, `-`, `_`, `.`)"
+            ),
         ))
     }
 }
@@ -411,7 +413,9 @@ fn validate_source_path(path: &str, kind: &str, name: &str) -> Result<(), Diagno
     if invalid {
         Err(Diagnostic::new(
             DiagnosticCode::UnsafePath,
-            format!("{kind} `{name}` path `{path}` must be a relative path without empty or `..` segments"),
+            format!(
+                "{kind} `{name}` path `{path}` must be a relative path without empty or `..` segments"
+            ),
         ))
     } else {
         Ok(())
@@ -510,8 +514,10 @@ enozunu config-version=1 {
 
     #[test]
     fn rejects_missing_config_version() {
-        assert!(codes(parse("enozunu { consumer { claude {} } }"))
-            .contains(&DiagnosticCode::ManifestShape));
+        assert!(
+            codes(parse("enozunu { consumer { claude {} } }"))
+                .contains(&DiagnosticCode::ManifestShape)
+        );
     }
 
     #[test]

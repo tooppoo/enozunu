@@ -176,3 +176,112 @@ fn io_diag(e: std::io::Error) -> Diagnostic {
         format!("filesystem operation failed: {e}"),
     )
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::manifest::SourceReference;
+
+    fn planned(kind: ArtifactKind, path: &str) -> PlannedMaterialization {
+        let target_rel_path = match kind {
+            ArtifactKind::Skill => ".claude/skills/demo".to_owned(),
+            ArtifactKind::Agent => ".claude/agents/demo.md".to_owned(),
+        };
+        PlannedMaterialization {
+            source_name: "demo".to_owned(),
+            kind,
+            reference: SourceReference {
+                git_url: "https://example.com/repo".to_owned(),
+                branch: "main".to_owned(),
+                path: path.to_owned(),
+            },
+            target_rel_path,
+        }
+    }
+
+    #[test]
+    fn check_rejects_an_unresolvable_checkout_dir() {
+        let tmp = tempfile::tempdir().unwrap();
+        let missing = tmp.path().join("does-not-exist");
+        let entry = planned(ArtifactKind::Agent, "agents/demo.md");
+        let diag = check(&entry, &missing, tmp.path()).unwrap_err();
+        assert_eq!(diag.code, DiagnosticCode::Io);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn check_rejects_a_source_that_escapes_the_checkout() {
+        use std::os::unix::fs::symlink;
+        let tmp = tempfile::tempdir().unwrap();
+        let checkout = tmp.path().join("checkout");
+        fs::create_dir_all(&checkout).unwrap();
+        let outside = tmp.path().join("outside");
+        fs::create_dir_all(&outside).unwrap();
+        symlink(&outside, checkout.join("escape")).unwrap();
+
+        let entry = planned(ArtifactKind::Skill, "escape");
+        let diag = check(&entry, &checkout, tmp.path()).unwrap_err();
+        assert_eq!(diag.code, DiagnosticCode::UnsafePath);
+    }
+
+    #[test]
+    fn check_rejects_a_skill_source_that_is_not_a_directory() {
+        let tmp = tempfile::tempdir().unwrap();
+        let checkout = tmp.path().join("checkout");
+        fs::create_dir_all(&checkout).unwrap();
+        fs::write(checkout.join("demo"), "a file, not a directory").unwrap();
+
+        let entry = planned(ArtifactKind::Skill, "demo");
+        let diag = check(&entry, &checkout, tmp.path()).unwrap_err();
+        assert_eq!(diag.code, DiagnosticCode::ArtifactShape);
+    }
+
+    #[test]
+    fn check_rejects_an_agent_source_that_is_not_a_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let checkout = tmp.path().join("checkout");
+        fs::create_dir_all(checkout.join("demo.md")).unwrap();
+
+        let entry = planned(ArtifactKind::Agent, "demo.md");
+        let diag = check(&entry, &checkout, tmp.path()).unwrap_err();
+        assert_eq!(diag.code, DiagnosticCode::ArtifactShape);
+    }
+
+    #[test]
+    fn check_then_execute_copies_a_nested_skill_tree() {
+        let tmp = tempfile::tempdir().unwrap();
+        let checkout = tmp.path().join("checkout");
+        let skill = checkout.join("skills/demo");
+        fs::create_dir_all(skill.join("nested")).unwrap();
+        fs::write(skill.join("SKILL.md"), "# demo\n").unwrap();
+        fs::write(skill.join("nested/extra.txt"), "child\n").unwrap();
+        let project = tmp.path().join("project");
+        fs::create_dir_all(&project).unwrap();
+
+        let checked = check(
+            &planned(ArtifactKind::Skill, "skills/demo"),
+            &checkout,
+            &project,
+        )
+        .unwrap();
+        execute(&checked).unwrap();
+
+        assert!(project.join(".claude/skills/demo/SKILL.md").is_file());
+        assert_eq!(
+            fs::read_to_string(project.join(".claude/skills/demo/nested/extra.txt")).unwrap(),
+            "child\n"
+        );
+    }
+
+    #[test]
+    fn execute_reports_io_failure_for_a_missing_source() {
+        let tmp = tempfile::tempdir().unwrap();
+        let checked = CheckedMaterialization {
+            source_abs: tmp.path().join("missing-skill"),
+            target_abs: tmp.path().join("project/.claude/skills/demo"),
+            kind: ArtifactKind::Skill,
+        };
+        let diag = execute(&checked).unwrap_err();
+        assert_eq!(diag.code, DiagnosticCode::Io);
+    }
+}

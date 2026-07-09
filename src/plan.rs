@@ -136,8 +136,10 @@ enozunu config-version=1 {
 }
 "#;
         let diags = plan(&manifest::parse(text).unwrap()).unwrap_err();
-        assert!(diags
-            .iter()
-            .any(|d| d.code == DiagnosticCode::DuplicateTargetPath));
+        assert!(
+            diags
+                .iter()
+                .any(|d| d.code == DiagnosticCode::DuplicateTargetPath)
+        );
     }
 }

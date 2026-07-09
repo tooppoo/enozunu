@@ -95,12 +95,8 @@ enozunu config-version=1 {{
 
 fn materialize(project: &TestProject) -> Result<(), Vec<enozunu::diagnostics::Diagnostic>> {
     let resolver = CommandGitResolver::new(project.root.join(".enozunu/cache"));
-    enozunu::run_materialize(
-        &project.root.join("enozunu.kdl"),
-        &project.root,
-        &resolver,
-    )
-    .map(|_| ())
+    enozunu::run_materialize(&project.root.join("enozunu.kdl"), &project.root, &resolver)
+        .map(|_| ())
 }
 
 #[test]
@@ -165,10 +161,12 @@ fn rematerialize_replaces_instead_of_merging() {
     materialize(&project).unwrap();
 
     assert!(!helper.exists());
-    assert!(project
-        .root
-        .join(".claude/skills/demo-skill/SKILL.md")
-        .is_file());
+    assert!(
+        project
+            .root
+            .join(".claude/skills/demo-skill/SKILL.md")
+            .is_file()
+    );
 }
 
 #[test]
@@ -195,9 +193,11 @@ fn rejects_skill_source_without_skill_md() {
     write_manifest(&project);
 
     let diags = materialize(&project).unwrap_err();
-    assert!(diags
-        .iter()
-        .any(|d| d.code == DiagnosticCode::ArtifactShape));
+    assert!(
+        diags
+            .iter()
+            .any(|d| d.code == DiagnosticCode::ArtifactShape)
+    );
     assert!(!project.root.join(".claude").exists());
 }
 
@@ -246,9 +246,11 @@ enozunu config-version=1 {{
     fs::write(project.root.join("enozunu.kdl"), manifest).unwrap();
 
     let diags = materialize(&project).unwrap_err();
-    assert!(diags
-        .iter()
-        .any(|d| d.code == DiagnosticCode::ArtifactShape));
+    assert!(
+        diags
+            .iter()
+            .any(|d| d.code == DiagnosticCode::ArtifactShape)
+    );
 }
 
 #[test]
@@ -278,9 +280,11 @@ enozunu config-version=1 {{
     fs::write(project.root.join("enozunu.kdl"), manifest).unwrap();
 
     let diags = materialize(&project).unwrap_err();
-    assert!(diags
-        .iter()
-        .any(|d| d.code == DiagnosticCode::GitResolution));
+    assert!(
+        diags
+            .iter()
+            .any(|d| d.code == DiagnosticCode::GitResolution)
+    );
 }
 
 #[test]

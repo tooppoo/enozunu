@@ -6,7 +6,7 @@
       "kind": "skill",
       "source_url": "https://github.com/tooppoo/catalog-agent-tools",
       "branch": "main",
-      "resolved_revision": "32ac4fb318cdb9cf7f4cda790990a7acfde8bb62",
+      "resolved_revision": "e3d3e4663d6756e9a4c49c7f99468a86d9603282",
       "source_path": "common/skills/documentation-writing",
       "target_ai": "claude",
       "target_path": ".claude/skills/documentation-writing"
@@ -16,10 +16,20 @@
       "kind": "skill",
       "source_url": "https://github.com/tooppoo/catalog-agent-tools",
       "branch": "main",
-      "resolved_revision": "32ac4fb318cdb9cf7f4cda790990a7acfde8bb62",
+      "resolved_revision": "e3d3e4663d6756e9a4c49c7f99468a86d9603282",
       "source_path": "common/skills/subagent-review-loop",
       "target_ai": "claude",
       "target_path": ".claude/skills/subagent-review-loop"
+    },
+    {
+      "source_name": "code-comment",
+      "kind": "skill",
+      "source_url": "https://github.com/tooppoo/catalog-agent-tools",
+      "branch": "main",
+      "resolved_revision": "e3d3e4663d6756e9a4c49c7f99468a86d9603282",
+      "source_path": "common/skills/code-comment",
+      "target_ai": "claude",
+      "target_path": ".claude/skills/code-comment"
     }
   ]
 }

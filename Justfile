@@ -10,3 +10,8 @@ build-dev:
 [group('release')]
 build-release:
   cargo build --release --locked
+
+[group('ai')]
+ai-setup: build-release
+  enozunu summon
+  git kura tools install --all

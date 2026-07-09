@@ -13,6 +13,13 @@ enozunu config-version=1 {
         branch "main"
         path "common/skills/documentation-writing"
       }
+
+      skill "code-comment" {
+        git "https://github.com/tooppoo/catalog-agent-tools"
+        branch "main"
+        path "common/skills/code-comment"
+      }
+
     }
 
     // agents {
@@ -27,7 +34,7 @@ enozunu config-version=1 {
   // `consumer` selects what to materialize for each target AI.
   consumer {
     claude {
-      use-skills "documentation-writing" "subagent-review-loop"
+      use-skills "documentation-writing" "subagent-review-loop" "code-comment"
     }
   }
 }

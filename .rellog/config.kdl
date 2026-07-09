@@ -15,7 +15,7 @@ rellog config-version=1 {
     }
 
     targets {
-      target "app"
+      target "cli"
     }
   }
 }

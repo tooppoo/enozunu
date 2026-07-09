@@ -4,7 +4,7 @@
   "version_command": "scripts/get-version.sh",
   "build_script": "scripts/release/build.sh",
   "build_dist": "build/bin",
-  "archive_prefix": "reportage",
+  "archive_prefix": "enozunu",
   "targets": [
     {
       "id": "linux-x86_64",
@@ -15,8 +15,8 @@
       "archive": "tar.gz",
       "archive_files": [
         {
-          "path": "build/bin/reportage",
-          "dest": "reportage"
+          "path": "build/bin/enozunu",
+          "dest": "enozunu"
         },
         {
           "path": "LICENSE"
@@ -35,8 +35,8 @@
       "archive": "tar.gz",
       "archive_files": [
         {
-          "path": "build/bin/reportage",
-          "dest": "reportage"
+          "path": "build/bin/enozunu",
+          "dest": "enozunu"
         },
         {
           "path": "LICENSE"
@@ -55,8 +55,8 @@
       "archive": "tar.gz",
       "archive_files": [
         {
-          "path": "build/bin/reportage",
-          "dest": "reportage"
+          "path": "build/bin/enozunu",
+          "dest": "enozunu"
         },
         {
           "path": "LICENSE"
@@ -75,8 +75,8 @@
       "archive": "tar.gz",
       "archive_files": [
         {
-          "path": "build/bin/reportage",
-          "dest": "reportage"
+          "path": "build/bin/enozunu",
+          "dest": "enozunu"
         },
         {
           "path": "LICENSE"

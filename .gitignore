@@ -4,6 +4,11 @@
 # test
 cov.json
 
+# ai
+## setup via `just setup`
+.agents/
+.claude/
+
 # other
 *.lock
 *.local.json

@@ -78,6 +78,8 @@ Create a starter manifest filled with placeholder values:
 enozunu init
 ```
 
+This also generates `.enozunu/.gitignore` so the resolver cache under `.enozunu/cache/` stays out of version control.
+
 Validate the manifest of the current project:
 
 ```sh

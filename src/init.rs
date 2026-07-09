@@ -67,6 +67,12 @@ const GITIGNORE_TEMPLATE: &str = "cache/\n";
 /// Refuses to overwrite an existing manifest.
 /// `init` bootstraps new projects; silently replacing a hand-edited manifest would destroy user configuration.
 pub fn run_init(manifest_path: &Path, project_root: &Path) -> Result<(), Diagnostic> {
+    // Ensure the cache ignore before the manifest write.
+    // The manifest write refuses to overwrite and returns early; a project that already has a
+    // manifest but predates this ignore could then never gain it. Writing the ignore first,
+    // and idempotently, lets a re-run add it to such a project.
+    write_cache_gitignore(project_root)?;
+
     // An exclusive create (`O_CREAT | O_EXCL`) instead of an exists-then-write sequence.
     // The exists check would follow a dangling symlink and let init write outside the intended path, and it would race with a concurrently created manifest.
     let mut file = match std::fs::OpenOptions::new()
@@ -96,9 +102,7 @@ pub fn run_init(manifest_path: &Path, project_root: &Path) -> Result<(), Diagnos
             DiagnosticCode::Io,
             format!("failed to write {}: {e}", manifest_path.display()),
         )
-    })?;
-
-    write_cache_gitignore(project_root)
+    })
 }
 
 /// Writes `.enozunu/.gitignore` so the resolver cache stays out of version control.
@@ -231,5 +235,19 @@ mod tests {
 
         assert_eq!(diag.code, DiagnosticCode::Io);
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "hand-edited\n");
+    }
+
+    #[test]
+    fn adds_gitignore_to_a_project_that_already_has_a_manifest() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("enozunu.kdl");
+        std::fs::write(&path, "hand-edited\n").unwrap();
+
+        // The manifest already exists, so init still reports the refusal.
+        run_init(&path, tmp.path()).unwrap_err();
+
+        // The ignore is created regardless, so re-running init backfills it for older projects.
+        let gitignore = std::fs::read_to_string(tmp.path().join(".enozunu/.gitignore")).unwrap();
+        assert_eq!(gitignore, GITIGNORE_TEMPLATE);
     }
 }

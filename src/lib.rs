@@ -70,6 +70,12 @@ pub fn run_materialize(
 
     let resolved = resolve_git_sources(&planned, resolver)?;
 
+    // Local sources are checked against every target this run writes, not only their own.
+    let target_rel_paths: Vec<String> = planned
+        .iter()
+        .map(|entry| entry.target_rel_path.clone())
+        .collect();
+
     let mut checked = Vec::new();
     let mut diags = Vec::new();
     for entry in &planned {
@@ -79,7 +85,7 @@ pub fn run_materialize(
             }
             SourceReference::Local { .. } => manifest_dir,
         };
-        match materialize::check(entry, source_base, project_root) {
+        match materialize::check(entry, source_base, project_root, &target_rel_paths) {
             Ok(c) => {
                 let origin = match &entry.reference {
                     SourceReference::Git { url, branch, .. } => ResolvedOrigin::Git {

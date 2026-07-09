@@ -561,6 +561,87 @@ enozunu config-version=1 {
 }
 
 #[test]
+fn rejects_local_source_whose_target_resolves_onto_it_through_a_symlink() {
+    let project = setup();
+    // `.claude/skills` is a symlink out of the project, so the `shared-skill` target resolves onto the source itself; materializing would destroy the source.
+    let shared = project.root.parent().unwrap().join("shared");
+    fs::create_dir_all(shared.join("shared-skill")).unwrap();
+    fs::write(shared.join("shared-skill/SKILL.md"), "# shared\n").unwrap();
+    fs::create_dir_all(project.root.join(".claude")).unwrap();
+    std::os::unix::fs::symlink(&shared, project.root.join(".claude/skills")).unwrap();
+
+    let manifest = r#"
+enozunu config-version=1 {
+  provider {
+    skills {
+      skill "shared-skill" {
+        local {
+          path "../shared/shared-skill"
+        }
+      }
+    }
+  }
+  consumer {
+    claude {
+      use-skills "shared-skill"
+    }
+  }
+}
+"#;
+    fs::write(project.root.join("enozunu.kdl"), manifest).unwrap();
+
+    let diags = materialize(&project).unwrap_err();
+    assert!(diags.iter().any(|d| d.code == DiagnosticCode::UnsafePath));
+    assert_eq!(
+        fs::read_to_string(shared.join("shared-skill/SKILL.md")).unwrap(),
+        "# shared\n"
+    );
+}
+
+#[test]
+fn rejects_local_source_that_overlaps_another_entries_target() {
+    let project = setup();
+    setup_local_source(&project);
+    // `inner-skill`'s source sits at the target that `local-skill` will replace in the same run.
+    let inner = project.root.join(".claude/skills/local-skill");
+    fs::create_dir_all(&inner).unwrap();
+    fs::write(inner.join("SKILL.md"), "# inner\n").unwrap();
+
+    let manifest = r#"
+enozunu config-version=1 {
+  provider {
+    skills {
+      skill "local-skill" {
+        local {
+          path "../local-src/skills/local-skill"
+        }
+      }
+      skill "inner-skill" {
+        local {
+          path ".claude/skills/local-skill"
+        }
+      }
+    }
+  }
+  consumer {
+    claude {
+      use-skills "local-skill" "inner-skill"
+    }
+  }
+}
+"#;
+    fs::write(project.root.join("enozunu.kdl"), manifest).unwrap();
+
+    let diags = materialize(&project).unwrap_err();
+    assert!(diags.iter().any(|d| d.code == DiagnosticCode::UnsafePath));
+    // The rejected run must not have replaced the overlapping source.
+    assert_eq!(
+        fs::read_to_string(inner.join("SKILL.md")).unwrap(),
+        "# inner\n"
+    );
+}
+
+#[test]
 fn materializes_git_and_local_sources_in_one_run() {
     let project = setup();
     setup_local_source(&project);

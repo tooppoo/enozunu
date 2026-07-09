@@ -23,18 +23,24 @@ pub struct CheckedMaterialization {
 /// Verifies the source artifact for `entry` without touching the target.
 ///
 /// `source_base` is the resolved checkout directory for Git references and the manifest file's containing directory for local references.
+/// `planned_target_rel_paths` lists every target path the current run will write; local sources are checked for overlap against all of them, because any of those writes could destroy an overlapping local source mid-run.
 pub fn check(
     entry: &PlannedMaterialization,
     source_base: &Path,
     project_root: &Path,
+    planned_target_rel_paths: &[String],
 ) -> Result<CheckedMaterialization, Diagnostic> {
     match &entry.reference {
         SourceReference::Git { path, .. } => {
             check_git_source(entry, path, source_base, project_root)
         }
-        SourceReference::Local { path } => {
-            check_local_source(entry, path, source_base, project_root)
-        }
+        SourceReference::Local { path } => check_local_source(
+            entry,
+            path,
+            source_base,
+            project_root,
+            planned_target_rel_paths,
+        ),
     }
 }
 
@@ -91,6 +97,7 @@ fn check_local_source(
     source_path: &str,
     manifest_dir: &Path,
     project_root: &Path,
+    planned_target_rel_paths: &[String],
 ) -> Result<CheckedMaterialization, Diagnostic> {
     let manifest_dir_canon = manifest_dir.canonicalize().map_err(|e| {
         Diagnostic::new(
@@ -140,26 +147,36 @@ fn check_local_source(
         )
     })?;
 
-    // A local source can point back into the target project, so an overlapping source and target would delete the source before copying it or copy it into itself.
+    // A local source can point back into the target project, so a source overlapping any target written this run would be deleted before copying or copied into itself.
     let project_canon = project_root.canonicalize().map_err(|e| {
         Diagnostic::new(
             DiagnosticCode::Io,
             format!("failed to resolve project root: {e}"),
         )
     })?;
-    let target_abs = project_canon.join(&entry.target_rel_path);
-    if source_canon.starts_with(&target_abs) || target_abs.starts_with(&source_canon) {
-        return Err(Diagnostic::new(
-            DiagnosticCode::UnsafePath,
-            format!(
-                "{} `{}`: local source path `{}` overlaps the materialization target `{}`",
-                entry.kind.as_str(),
-                entry.source_name,
-                source_path,
-                entry.target_rel_path
-            ),
-        ));
+    let mut own_target_abs = None;
+    for target_rel_path in planned_target_rel_paths {
+        let target_abs = canonicalize_target(&project_canon.join(target_rel_path))?;
+        if source_canon.starts_with(&target_abs) || target_abs.starts_with(&source_canon) {
+            return Err(Diagnostic::new(
+                DiagnosticCode::UnsafePath,
+                format!(
+                    "{} `{}`: local source path `{}` overlaps the materialization target `{}`",
+                    entry.kind.as_str(),
+                    entry.source_name,
+                    source_path,
+                    target_rel_path
+                ),
+            ));
+        }
+        if target_rel_path == &entry.target_rel_path {
+            own_target_abs = Some(target_abs);
+        }
     }
+    let target_abs = match own_target_abs {
+        Some(target) => target,
+        None => canonicalize_target(&project_canon.join(&entry.target_rel_path))?,
+    };
 
     check_artifact_shape(entry, &source_canon, source_path)?;
 
@@ -168,6 +185,41 @@ fn check_local_source(
         target_abs,
         kind: entry.kind,
     })
+}
+
+/// Canonicalizes a target path whose tail may not exist yet, by canonicalizing the deepest existing ancestor and re-appending the remaining components.
+///
+/// Comparing a canonical source against the lexical target path would miss overlap when an existing ancestor (such as a symlinked `.claude/skills`) resolves elsewhere; execution would then follow that symlink and destroy the source it resolves to.
+fn canonicalize_target(path: &Path) -> Result<PathBuf, Diagnostic> {
+    let mut existing = path.to_path_buf();
+    let mut remainder = Vec::new();
+    loop {
+        match existing.canonicalize() {
+            Ok(mut canon) => {
+                for component in remainder.iter().rev() {
+                    canon.push(component);
+                }
+                return Ok(canon);
+            }
+            Err(_) => {
+                match existing.file_name() {
+                    Some(name) => remainder.push(name.to_owned()),
+                    None => {
+                        return Err(Diagnostic::new(
+                            DiagnosticCode::Io,
+                            format!("failed to resolve target path {}", path.display()),
+                        ));
+                    }
+                }
+                if !existing.pop() {
+                    return Err(Diagnostic::new(
+                        DiagnosticCode::Io,
+                        format!("failed to resolve target path {}", path.display()),
+                    ));
+                }
+            }
+        }
+    }
 }
 
 /// Shape checks shared by Git and local sources: validation is shape-based, not origin-based.
@@ -327,12 +379,26 @@ mod tests {
         }
     }
 
+    /// Wraps `check` with a single-entry run whose only planned target is the entry's own.
+    fn check_single(
+        entry: &PlannedMaterialization,
+        source_base: &Path,
+        project_root: &Path,
+    ) -> Result<CheckedMaterialization, Diagnostic> {
+        check(
+            entry,
+            source_base,
+            project_root,
+            &[entry.target_rel_path.clone()],
+        )
+    }
+
     #[test]
     fn check_rejects_an_unresolvable_checkout_dir() {
         let tmp = tempfile::tempdir().unwrap();
         let missing = tmp.path().join("does-not-exist");
         let entry = planned(ArtifactKind::Agent, "agents/demo.md");
-        let diag = check(&entry, &missing, tmp.path()).unwrap_err();
+        let diag = check_single(&entry, &missing, tmp.path()).unwrap_err();
         assert_eq!(diag.code, DiagnosticCode::Io);
     }
 
@@ -348,7 +414,7 @@ mod tests {
         symlink(&outside, checkout.join("escape")).unwrap();
 
         let entry = planned(ArtifactKind::Skill, "escape");
-        let diag = check(&entry, &checkout, tmp.path()).unwrap_err();
+        let diag = check_single(&entry, &checkout, tmp.path()).unwrap_err();
         assert_eq!(diag.code, DiagnosticCode::UnsafePath);
     }
 
@@ -360,7 +426,7 @@ mod tests {
         fs::write(checkout.join("demo"), "a file, not a directory").unwrap();
 
         let entry = planned(ArtifactKind::Skill, "demo");
-        let diag = check(&entry, &checkout, tmp.path()).unwrap_err();
+        let diag = check_single(&entry, &checkout, tmp.path()).unwrap_err();
         assert_eq!(diag.code, DiagnosticCode::ArtifactShape);
     }
 
@@ -371,7 +437,7 @@ mod tests {
         fs::create_dir_all(checkout.join("demo.md")).unwrap();
 
         let entry = planned(ArtifactKind::Agent, "demo.md");
-        let diag = check(&entry, &checkout, tmp.path()).unwrap_err();
+        let diag = check_single(&entry, &checkout, tmp.path()).unwrap_err();
         assert_eq!(diag.code, DiagnosticCode::ArtifactShape);
     }
 
@@ -386,7 +452,7 @@ mod tests {
         let project = tmp.path().join("project");
         fs::create_dir_all(&project).unwrap();
 
-        let checked = check(
+        let checked = check_single(
             &planned(ArtifactKind::Skill, "skills/demo"),
             &checkout,
             &project,
@@ -411,7 +477,7 @@ mod tests {
         fs::write(sibling_skill.join("SKILL.md"), "# demo\n").unwrap();
 
         let entry = planned_local(ArtifactKind::Skill, "../sibling/skills/demo");
-        let checked = check(&entry, &manifest_dir, &manifest_dir).unwrap();
+        let checked = check_single(&entry, &manifest_dir, &manifest_dir).unwrap();
 
         assert_eq!(checked.source_abs, sibling_skill.canonicalize().unwrap());
     }
@@ -420,7 +486,7 @@ mod tests {
     fn check_rejects_a_missing_local_source() {
         let tmp = tempfile::tempdir().unwrap();
         let entry = planned_local(ArtifactKind::Skill, "does-not-exist");
-        let diag = check(&entry, tmp.path(), tmp.path()).unwrap_err();
+        let diag = check_single(&entry, tmp.path(), tmp.path()).unwrap_err();
         assert_eq!(diag.code, DiagnosticCode::ArtifactShape);
     }
 
@@ -430,7 +496,7 @@ mod tests {
         fs::create_dir_all(tmp.path().join("demo.md")).unwrap();
 
         let entry = planned_local(ArtifactKind::Agent, "demo.md");
-        let diag = check(&entry, tmp.path(), tmp.path()).unwrap_err();
+        let diag = check_single(&entry, tmp.path(), tmp.path()).unwrap_err();
         assert_eq!(diag.code, DiagnosticCode::ArtifactShape);
     }
 
@@ -445,7 +511,7 @@ mod tests {
         symlink(&real, tmp.path().join("linked-skill")).unwrap();
 
         let entry = planned_local(ArtifactKind::Skill, "linked-skill");
-        let diag = check(&entry, tmp.path(), tmp.path()).unwrap_err();
+        let diag = check_single(&entry, tmp.path(), tmp.path()).unwrap_err();
         assert_eq!(diag.code, DiagnosticCode::UnsafePath);
     }
 
@@ -461,7 +527,7 @@ mod tests {
         symlink("../secret.txt", skill.join("link.txt")).unwrap();
 
         let entry = planned_local(ArtifactKind::Skill, "skill");
-        let diag = check(&entry, tmp.path(), tmp.path()).unwrap_err();
+        let diag = check_single(&entry, tmp.path(), tmp.path()).unwrap_err();
         assert_eq!(diag.code, DiagnosticCode::UnsafePath);
     }
 
@@ -473,7 +539,7 @@ mod tests {
         fs::write(source.join("SKILL.md"), "# demo\n").unwrap();
 
         let entry = planned_local(ArtifactKind::Skill, ".claude/skills/demo");
-        let diag = check(&entry, tmp.path(), tmp.path()).unwrap_err();
+        let diag = check_single(&entry, tmp.path(), tmp.path()).unwrap_err();
         assert_eq!(diag.code, DiagnosticCode::UnsafePath);
     }
 
@@ -484,7 +550,7 @@ mod tests {
         fs::create_dir_all(tmp.path().join(".claude")).unwrap();
 
         let entry = planned_local(ArtifactKind::Skill, ".claude");
-        let diag = check(&entry, tmp.path(), tmp.path()).unwrap_err();
+        let diag = check_single(&entry, tmp.path(), tmp.path()).unwrap_err();
         assert_eq!(diag.code, DiagnosticCode::UnsafePath);
     }
 
@@ -494,7 +560,50 @@ mod tests {
         fs::create_dir_all(tmp.path().join(".claude/skills/demo/inner")).unwrap();
 
         let entry = planned_local(ArtifactKind::Skill, ".claude/skills/demo/inner");
-        let diag = check(&entry, tmp.path(), tmp.path()).unwrap_err();
+        let diag = check_single(&entry, tmp.path(), tmp.path()).unwrap_err();
+        assert_eq!(diag.code, DiagnosticCode::UnsafePath);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn check_rejects_a_local_source_reached_through_a_symlinked_target_ancestor() {
+        use std::os::unix::fs::symlink;
+        let tmp = tempfile::tempdir().unwrap();
+        let project = tmp.path().join("project");
+        let shared = tmp.path().join("shared");
+        fs::create_dir_all(project.join(".claude")).unwrap();
+        fs::create_dir_all(shared.join("demo")).unwrap();
+        fs::write(shared.join("demo/SKILL.md"), "# demo\n").unwrap();
+        // `.claude/skills` resolves outside the project, so the `.claude/skills/demo` target is the source itself.
+        symlink(&shared, project.join(".claude/skills")).unwrap();
+
+        let entry = planned_local(ArtifactKind::Skill, "../shared/demo");
+        let diag = check_single(&entry, &project, &project).unwrap_err();
+
+        assert_eq!(diag.code, DiagnosticCode::UnsafePath);
+        assert!(shared.join("demo/SKILL.md").is_file());
+    }
+
+    #[test]
+    fn check_rejects_a_local_source_overlapping_another_entries_target() {
+        let tmp = tempfile::tempdir().unwrap();
+        let other_target = tmp.path().join(".claude/skills/other");
+        fs::create_dir_all(&other_target).unwrap();
+        fs::write(other_target.join("SKILL.md"), "# other\n").unwrap();
+
+        // The source is valid on its own, but another entry in the same run materializes over it.
+        let entry = planned_local(ArtifactKind::Skill, ".claude/skills/other");
+        let diag = check(
+            &entry,
+            tmp.path(),
+            tmp.path(),
+            &[
+                entry.target_rel_path.clone(),
+                ".claude/skills/other".to_owned(),
+            ],
+        )
+        .unwrap_err();
+
         assert_eq!(diag.code, DiagnosticCode::UnsafePath);
     }
 
@@ -509,7 +618,7 @@ mod tests {
         fs::write(skill.join("nested/extra.txt"), "child\n").unwrap();
 
         let entry = planned_local(ArtifactKind::Skill, "../sibling/skills/demo");
-        let checked = check(&entry, &manifest_dir, &manifest_dir).unwrap();
+        let checked = check_single(&entry, &manifest_dir, &manifest_dir).unwrap();
         execute(&checked).unwrap();
 
         assert!(manifest_dir.join(".claude/skills/demo/SKILL.md").is_file());

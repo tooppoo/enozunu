@@ -160,7 +160,9 @@ Local sources also keep the filesystem safety policy:
 
 - a local source path that is a symlink is rejected
 - symlinked Skill contents are rejected
-- a local source path that equals, contains, or is contained by its materialization target path is rejected
+- a local source path that equals, contains, or is contained by any target path materialized in the same run is rejected
+
+Target paths are canonicalized through any existing symlinked ancestors before the overlap comparison, so a symlinked `.claude/skills` cannot hide an overlap.
 
 ## Consumer Block
 

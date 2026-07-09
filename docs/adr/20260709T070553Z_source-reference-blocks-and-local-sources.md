@@ -58,7 +58,9 @@ Local sources must keep the filesystem safety policy at least as strict as Git s
 
 - a `local.path` that resolves to a symlink is rejected
 - symlinked Skill contents are rejected
-- a resolved local source path that equals, contains, or is contained by its materialization target path is rejected, because Git sources are copied from cache checkouts while local sources can point back into the target project
+- a resolved local source path that equals, contains, or is contained by any target path materialized in the same run is rejected, because Git sources are copied from cache checkouts while local sources can point back into the target project
+
+Target paths are canonicalized through their deepest existing ancestor before the overlap comparison. A lexical comparison would miss an overlap hidden behind a symlinked ancestor such as `.claude/skills`, and execution would then delete the source the symlink resolves to.
 
 ## Alternatives Considered
 

@@ -556,7 +556,12 @@ fn validate_name(name: &str, kind: &str) -> Result<(), Diagnostic> {
 /// Local paths resolve from the manifest directory, so `..` segments are allowed for sibling repositories.
 /// Absolute paths are a portability hazard in a shared manifest, so v0.0.x rejects them until support is decided explicitly.
 fn validate_local_source_path(path: &str, kind: &str, name: &str) -> Result<(), Diagnostic> {
-    if path.starts_with('/') {
+    // The manifest is shared across hosts, so Windows-style absolute forms (drive letter, `\` root, UNC) are rejected on every platform, not only where `Path::is_absolute` recognizes them.
+    let absolute_like = path.starts_with('/')
+        || path.starts_with('\\')
+        || path.chars().nth(1) == Some(':')
+        || std::path::Path::new(path).is_absolute();
+    if absolute_like {
         return Err(Diagnostic::new(
             DiagnosticCode::UnsupportedSourceReference,
             format!(
@@ -1015,6 +1020,30 @@ enozunu config-version=1 {
 }
 "#;
         assert!(codes(parse(text)).contains(&DiagnosticCode::UnsupportedSourceReference));
+    }
+
+    #[test]
+    fn rejects_windows_style_absolute_local_paths() {
+        for path in [r"C:/skills/a", r"C:\skills\a", r"\\server\share\a"] {
+            // KDL strings escape `\` as `\\`.
+            let kdl_path = path.replace('\\', "\\\\");
+            let text = format!(
+                r#"
+enozunu config-version=1 {{
+  provider {{
+    skills {{
+      skill "a" {{ local {{ path "{kdl_path}" }} }}
+    }}
+  }}
+  consumer {{ claude {{ use-skills "a" }} }}
+}}
+"#
+            );
+            assert!(
+                codes(parse(&text)).contains(&DiagnosticCode::UnsupportedSourceReference),
+                "path {path} must be rejected as absolute"
+            );
+        }
     }
 
     #[test]

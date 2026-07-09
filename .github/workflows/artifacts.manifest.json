@@ -1,0 +1,90 @@
+{
+  "schema": 1,
+  "artifact_name": "artifacts",
+  "version_command": "scripts/get-version.sh",
+  "build_script": "scripts/release/build.sh",
+  "build_dist": "build/bin",
+  "archive_prefix": "reportage",
+  "targets": [
+    {
+      "id": "linux-x86_64",
+      "runner": "ubuntu-24.04",
+      "os": "Linux",
+      "arch": "x86_64",
+      "target": "x86_64-unknown-linux-gnu",
+      "archive": "tar.gz",
+      "archive_files": [
+        {
+          "path": "build/bin/reportage",
+          "dest": "reportage"
+        },
+        {
+          "path": "LICENSE"
+        },
+        {
+          "path": "README.md"
+        }
+      ]
+    },
+    {
+      "id": "linux-aarch64",
+      "runner": "ubuntu-24.04-arm",
+      "os": "Linux",
+      "arch": "aarch64",
+      "target": "aarch64-unknown-linux-gnu",
+      "archive": "tar.gz",
+      "archive_files": [
+        {
+          "path": "build/bin/reportage",
+          "dest": "reportage"
+        },
+        {
+          "path": "LICENSE"
+        },
+        {
+          "path": "README.md"
+        }
+      ]
+    },
+    {
+      "id": "darwin-x86_64",
+      "runner": "macos-15-intel",
+      "os": "Darwin",
+      "arch": "x86_64",
+      "target": "x86_64-apple-darwin",
+      "archive": "tar.gz",
+      "archive_files": [
+        {
+          "path": "build/bin/reportage",
+          "dest": "reportage"
+        },
+        {
+          "path": "LICENSE"
+        },
+        {
+          "path": "README.md"
+        }
+      ]
+    },
+    {
+      "id": "darwin-arm64",
+      "runner": "macos-15",
+      "os": "Darwin",
+      "arch": "arm64",
+      "target": "aarch64-apple-darwin",
+      "archive": "tar.gz",
+      "archive_files": [
+        {
+          "path": "build/bin/reportage",
+          "dest": "reportage"
+        },
+        {
+          "path": "LICENSE"
+        },
+        {
+          "path": "README.md"
+        }
+      ]
+    }
+  ]
+}

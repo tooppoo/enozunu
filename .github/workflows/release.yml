@@ -1,0 +1,52 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "[0-9]*.[0-9]*.[0-9]*"
+
+permissions:
+  contents: read
+
+jobs:
+  check-ready:
+    name: Check release readiness
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+
+      - name: Check release is ready
+        uses: tooppoo/rellog/actions/ready@aa5a54faf97db603961e391f70c8063afe4775aa # v0.1.0
+        with:
+          release-id: ${{ github.ref_name }}
+
+  setup-artifacts:
+    uses: tooppoo/github-release-workflows/.github/workflows/wf-cross-platform-build.yml@main
+    needs: check-ready
+    with:
+      config_path: .github/workflows/artifacts.manifest.json
+
+  release:
+    name: Create GitHub Release
+    runs-on: ubuntu-latest
+    needs: setup-artifacts
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+
+      - name: Get all archives
+        uses: actions/download-artifact@v8
+        with:
+          name: ${{ needs.setup-artifacts.outputs.artifact_name }}
+          path: dist
+
+      - name: Create GitHub Release
+        uses: tooppoo/rellog/actions/create-release-note@main
+        with:
+          release-id: ${{ github.ref_name }}
+          files: |
+            dist/*.tar.gz
+            dist/checksums.txt

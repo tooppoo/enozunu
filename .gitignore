@@ -1,5 +1,6 @@
 # Rust build outputs
 /target
+/dist
 
 # test
 cov.json

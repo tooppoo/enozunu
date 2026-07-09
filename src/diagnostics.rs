@@ -35,7 +35,7 @@ pub enum DiagnosticCode {
     UnsupportedConfigVersion,
     /// The manifest selects a consumer target that v0.0.x does not support, such as `consumer.codex`.
     UnsupportedConsumer,
-    /// The source reference is not the normalized `git` + `branch` + `path` form, such as a GitHub tree/blob URL shorthand.
+    /// The source reference uses a form outside the supported `git` / `local` blocks, such as an unknown block kind, a GitHub tree/blob URL shorthand, or an absolute local path.
     UnsupportedSourceReference,
     /// Two sources of the same kind share a name.
     DuplicateSourceName,

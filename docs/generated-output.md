@@ -93,15 +93,29 @@ use one of these approaches:
 
 `.enozunu/provenance.json` records the previous materialization result.
 
-It should include information such as:
+Each entry should include information such as:
 
 - source name
-- source URL
-- branch
-- resolved revision
-- source path
+- artifact kind
+- a typed `source` object
 - target AI
 - target path
+
+Source-specific fields live under the typed `source` object rather than as top-level fields, so entries stay structurally consistent across source kinds.
+
+For a Git source, the `source` object records:
+
+- `type` (`"git"`)
+- `url`
+- `branch`
+- `path`
+- `resolved_revision`
+
+For a local source, the `source` object records:
+
+- `type` (`"local"`)
+- `path` (as written in the manifest)
+- `resolved_path` (the canonical filesystem path)
 
 `provenance.json` is not a lockfile.
 It is not used as a resolution input in v0.0.x.

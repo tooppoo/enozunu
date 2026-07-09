@@ -34,17 +34,21 @@ enozunu config-version=1 {
   provider {
     skills {
       skill "git-kura" {
-        git "https://github.com/tooppoo/reportage"
-        branch "main"
-        path ".claude/skills/git-kura"
+        git {
+          url "https://github.com/tooppoo/reportage"
+          branch "main"
+          path ".claude/skills/git-kura"
+        }
       }
     }
 
     agents {
       agent "shell-script-reviewer" {
-        git "https://github.com/tooppoo/installerer"
-        branch "main"
-        path ".claude/agents/shell-script-reviewer.md"
+        git {
+          url "https://github.com/tooppoo/installerer"
+          branch "main"
+          path ".claude/agents/shell-script-reviewer.md"
+        }
       }
     }
   }
@@ -57,18 +61,12 @@ A Skill source is declared under `provider.skills`.
 
 ```kdl
 skill "git-kura" {
-  git "https://github.com/tooppoo/reportage"
-  branch "main"
-  path ".claude/skills/git-kura"
+  git {
+    url "https://github.com/tooppoo/reportage"
+    branch "main"
+    path ".claude/skills/git-kura"
+  }
 }
-```
-
-Required fields:
-
-```text
-git
-branch
-path
 ```
 
 A Skill source must resolve to a directory containing `SKILL.md`.
@@ -79,21 +77,92 @@ An agent source is declared under `provider.agents`.
 
 ```kdl
 agent "shell-script-reviewer" {
-  git "https://github.com/tooppoo/installerer"
+  git {
+    url "https://github.com/tooppoo/installerer"
+    branch "main"
+    path ".claude/agents/shell-script-reviewer.md"
+  }
+}
+```
+
+An agent source must resolve to a file. For v0.0.x, that file is materialized into `.claude/agents/<name>.md`.
+
+## Source Reference Blocks
+
+Each `skill` or `agent` declaration must contain exactly one source reference block.
+
+Supported source reference blocks:
+
+```text
+git
+local
+```
+
+The following are invalid:
+
+- no source reference block
+- both `git` and `local` in one declaration
+- multiple `git` blocks
+- multiple `local` blocks
+- unsupported source reference blocks
+
+The rationale for this structure is recorded in [the source reference blocks ADR](adr/20260709T070553Z_source-reference-blocks-and-local-sources.md).
+
+### Git Source Reference
+
+```kdl
+git {
+  url "https://github.com/example/repo"
   branch "main"
-  path ".claude/agents/shell-script-reviewer.md"
+  path ".claude/skills/example"
 }
 ```
 
 Required fields:
 
 ```text
-git
+url
 branch
 path
 ```
 
-An agent source must resolve to a file. For v0.0.x, that file is materialized into `.claude/agents/<name>.md`.
+Semantics:
+
+- `url` is the Git repository URL.
+- `branch` is the branch to resolve.
+- `path` is the artifact path inside the resolved Git checkout.
+- `path` must be relative and must not contain empty or `..` segments.
+
+### Local Source Reference
+
+```kdl
+local {
+  path "../some-repo/.claude/skills/example"
+}
+```
+
+Required fields:
+
+```text
+path
+```
+
+Semantics:
+
+- `path` is the local filesystem path to the artifact itself.
+- Relative `path` values are resolved from the manifest file's containing directory, not from the process working directory.
+- `path` may contain `..` so sibling repositories can be referenced.
+- Absolute paths are rejected in v0.0.x.
+
+Local sources use the same artifact-shape contract as Git sources: a Skill source is a directory containing `SKILL.md`, and an agent source is a file.
+
+Local sources also keep the filesystem safety policy:
+
+- a local source path that is a symlink is rejected
+- symlinked Skill contents are rejected
+- a local source path that equals, contains, or is contained by any target path materialized in the same run is rejected
+
+Target paths are canonicalized through any existing symlinked ancestors before the overlap comparison, so a symlinked `.claude/skills` cannot hide an overlap.
 
 ## Consumer Block
 
@@ -161,12 +230,13 @@ revision selector
 tag selector
 latest selector
 version range
+absolute local paths
 ```
 
-For v0.0.x, source references must use the normalized form:
+For v0.0.x, Git source references must use the normalized form:
 
 ```text
-git + branch + path
+git { url + branch + path }
 ```
 
 ## Validation Rules
@@ -176,11 +246,16 @@ v0.0.x should reject:
 - duplicate source names within the same kind
 - `use-skills` references that do not exist under `provider.skills`
 - `use-agents` references that do not exist under `provider.agents`
+- source declarations without exactly one source reference block
+- unsupported source reference blocks
 - Skill sources that do not contain `SKILL.md`
 - source paths that cannot be resolved
 - GitHub tree/blob URL shorthand
 - `consumer.codex`
 - path traversal or symlink writes outside the target root
+- absolute `local` paths
+- symlinked `local` source paths
+- `local` source paths overlapping their materialization target paths
 - multiple sources materializing to the same target path
 
 v0.0.x should not reject a source merely because its URL or path is not under `.claude/`.
@@ -192,30 +267,34 @@ enozunu config-version=1 {
   provider {
     skills {
       skill "git-kura" {
-        git "https://github.com/tooppoo/reportage"
-        branch "main"
-        path ".claude/skills/git-kura"
+        git {
+          url "https://github.com/tooppoo/reportage"
+          branch "main"
+          path ".claude/skills/git-kura"
+        }
       }
 
-      skill "semantic-line-breaks" {
-        git "https://github.com/tooppoo/reportage"
-        branch "main"
-        path ".claude/skills/semantic-line-breaks"
+      skill "local-git-kura" {
+        local {
+          path "../reportage/.claude/skills/git-kura"
+        }
       }
     }
 
     agents {
       agent "shell-script-reviewer" {
-        git "https://github.com/tooppoo/installerer"
-        branch "main"
-        path ".claude/agents/shell-script-reviewer.md"
+        git {
+          url "https://github.com/tooppoo/installerer"
+          branch "main"
+          path ".claude/agents/shell-script-reviewer.md"
+        }
       }
     }
   }
 
   consumer {
     claude {
-      use-skills "git-kura" "semantic-line-breaks"
+      use-skills "git-kura" "local-git-kura"
       use-agents "shell-script-reviewer"
     }
   }

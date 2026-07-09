@@ -16,30 +16,38 @@ enozunu config-version=1 {
   // `provider` declares the sources available for materialization.
   provider {
     // Skill sources. Each skill must resolve to a directory containing SKILL.md.
+    // Every skill and agent declares exactly one source reference block: `git` or `local`.
     skills {
       skill "example-skill" {
-        // Git repository hosting the skill. GitHub tree/blob URL shorthand is not supported.
-        git "https://github.com/your-org/your-skills-repo"
-        // Branch to follow. Each run resolves the current head of this branch.
-        branch "main"
-        // Repository-relative path to the skill directory.
-        path "path/to/skills/example-skill"
+        // Git source reference: resolves the skill from a Git repository.
+        git {
+          // Repository hosting the skill. GitHub tree/blob URL shorthand is not supported.
+          url "https://github.com/your-org/your-skills-repo"
+          // Branch to follow. Each run resolves the current head of this branch.
+          branch "main"
+          // Repository-relative path to the skill directory.
+          path "path/to/skills/example-skill"
+        }
       }
 
       skill "another-skill" {
-        git "https://github.com/your-org/your-skills-repo"
-        branch "main"
-        path "path/to/skills/another-skill"
+        // Local source reference: resolves the skill from the filesystem.
+        local {
+          // Path relative to this manifest's directory. `..` may reference sibling repositories; absolute paths are rejected.
+          path "../sibling-repo/path/to/skills/another-skill"
+        }
       }
     }
 
     // Agent sources. Each agent must resolve to a single file.
     agents {
       agent "example-agent" {
-        git "https://github.com/your-org/your-agents-repo"
-        branch "main"
-        // Repository-relative path to the agent file.
-        path "path/to/agents/example-agent.md"
+        git {
+          url "https://github.com/your-org/your-agents-repo"
+          branch "main"
+          // Repository-relative path to the agent file.
+          path "path/to/agents/example-agent.md"
+        }
       }
     }
   }

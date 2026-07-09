@@ -35,18 +35,18 @@ Recommended Git-ignored files:
 ```text
 .claude/
 .enozunu/cache/
-.enozunu/materialized/
 ```
 
-Example `.gitignore`:
+`enozunu init` generates `.enozunu/.gitignore` containing `cache/`, so the resolver cache under `.enozunu/cache/` is ignored without manual setup.
+An existing `.enozunu/.gitignore` is left untouched, so a hand-edited file survives re-running `init`.
+
+The `.claude/` generated output lives at the repository root, outside `.enozunu`, so ignoring it remains a manual choice.
+
+Example repository-root `.gitignore`:
 
 ```gitignore
 # Generated target AI-native configuration
 .claude/
-
-# Enozunu working outputs
-.enozunu/cache/
-.enozunu/materialized/
 ```
 
 If a project chooses to manually maintain `.claude/`,

@@ -60,7 +60,7 @@ fn main() -> ExitCode {
             project_root,
         } => {
             let manifest_path = manifest.unwrap_or_else(|| project_root.join(MANIFEST_FILE_NAME));
-            enozunu::init::run_init(&manifest_path)
+            enozunu::init::run_init(&manifest_path, &project_root)
                 .map(|()| {
                     println!("created {}", manifest_path.display());
                 })

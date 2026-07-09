@@ -57,11 +57,22 @@ enozunu config-version=1 {
 }
 "#;
 
-/// Writes the starter manifest to `manifest_path`.
+// Excludes the resolver cache that `summon` populates at `.enozunu/cache`.
+// The pattern is relative to the `.enozunu` directory holding this file.
+// provenance.json is deliberately left tracked; only the reproducible cache is ignored.
+const GITIGNORE_TEMPLATE: &str = "cache/\n";
+
+/// Writes the starter manifest and the `.enozunu/.gitignore` that excludes the resolver cache.
 ///
-/// Refuses to overwrite an existing file.
+/// Refuses to overwrite an existing manifest.
 /// `init` bootstraps new projects; silently replacing a hand-edited manifest would destroy user configuration.
-pub fn run_init(manifest_path: &Path) -> Result<(), Diagnostic> {
+pub fn run_init(manifest_path: &Path, project_root: &Path) -> Result<(), Diagnostic> {
+    // Ensure the cache ignore before the manifest write.
+    // The manifest write refuses to overwrite and returns early; a project that already has a
+    // manifest but predates this ignore could then never gain it. Writing the ignore first,
+    // and idempotently, lets a re-run add it to such a project.
+    write_cache_gitignore(project_root)?;
+
     // An exclusive create (`O_CREAT | O_EXCL`) instead of an exists-then-write sequence.
     // The exists check would follow a dangling symlink and let init write outside the intended path, and it would race with a concurrently created manifest.
     let mut file = match std::fs::OpenOptions::new()
@@ -94,6 +105,40 @@ pub fn run_init(manifest_path: &Path) -> Result<(), Diagnostic> {
     })
 }
 
+/// Writes `.enozunu/.gitignore` so the resolver cache stays out of version control.
+///
+/// Leaves an existing `.gitignore` untouched so a hand-edited file survives a re-run;
+/// `init` only guarantees the file's presence, not its exact contents.
+fn write_cache_gitignore(project_root: &Path) -> Result<(), Diagnostic> {
+    let dir = project_root.join(".enozunu");
+    std::fs::create_dir_all(&dir).map_err(|e| {
+        Diagnostic::new(
+            DiagnosticCode::Io,
+            format!("failed to create {}: {e}", dir.display()),
+        )
+    })?;
+
+    let path = dir.join(".gitignore");
+    // Exclusive create for the same dangling-symlink and race reasons as the manifest write above.
+    match std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&path)
+    {
+        Ok(mut file) => file.write_all(GITIGNORE_TEMPLATE.as_bytes()).map_err(|e| {
+            Diagnostic::new(
+                DiagnosticCode::Io,
+                format!("failed to write {}: {e}", path.display()),
+            )
+        }),
+        Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => Ok(()),
+        Err(e) => Err(Diagnostic::new(
+            DiagnosticCode::Io,
+            format!("failed to write {}: {e}", path.display()),
+        )),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -112,10 +157,37 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("enozunu.kdl");
 
-        run_init(&path).unwrap();
+        run_init(&path, tmp.path()).unwrap();
 
         let written = std::fs::read_to_string(&path).unwrap();
         assert_eq!(written, TEMPLATE);
+    }
+
+    #[test]
+    fn writes_cache_gitignore() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("enozunu.kdl");
+
+        run_init(&path, tmp.path()).unwrap();
+
+        let gitignore = std::fs::read_to_string(tmp.path().join(".enozunu/.gitignore")).unwrap();
+        assert_eq!(gitignore, GITIGNORE_TEMPLATE);
+    }
+
+    #[test]
+    fn keeps_existing_gitignore() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("enozunu.kdl");
+        let gitignore_path = tmp.path().join(".enozunu/.gitignore");
+        std::fs::create_dir_all(gitignore_path.parent().unwrap()).unwrap();
+        std::fs::write(&gitignore_path, "cache/\nnotes.txt\n").unwrap();
+
+        run_init(&path, tmp.path()).unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(&gitignore_path).unwrap(),
+            "cache/\nnotes.txt\n"
+        );
     }
 
     #[test]
@@ -125,7 +197,7 @@ mod tests {
         let target = tmp.path().join("elsewhere.kdl");
         std::os::unix::fs::symlink(&target, &path).unwrap();
 
-        let diag = run_init(&path).unwrap_err();
+        let diag = run_init(&path, tmp.path()).unwrap_err();
 
         assert_eq!(diag.code, DiagnosticCode::Io);
         assert!(!target.exists());
@@ -136,7 +208,19 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("missing-dir/enozunu.kdl");
 
-        let diag = run_init(&path).unwrap_err();
+        let diag = run_init(&path, tmp.path()).unwrap_err();
+
+        assert_eq!(diag.code, DiagnosticCode::Io);
+    }
+
+    #[test]
+    fn reports_gitignore_write_failure_as_io_diagnostic() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("enozunu.kdl");
+        // A regular file where the `.enozunu` directory must go blocks its creation.
+        std::fs::write(tmp.path().join(".enozunu"), "").unwrap();
+
+        let diag = run_init(&path, tmp.path()).unwrap_err();
 
         assert_eq!(diag.code, DiagnosticCode::Io);
     }
@@ -147,9 +231,23 @@ mod tests {
         let path = tmp.path().join("enozunu.kdl");
         std::fs::write(&path, "hand-edited\n").unwrap();
 
-        let diag = run_init(&path).unwrap_err();
+        let diag = run_init(&path, tmp.path()).unwrap_err();
 
         assert_eq!(diag.code, DiagnosticCode::Io);
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "hand-edited\n");
+    }
+
+    #[test]
+    fn adds_gitignore_to_a_project_that_already_has_a_manifest() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("enozunu.kdl");
+        std::fs::write(&path, "hand-edited\n").unwrap();
+
+        // The manifest already exists, so init still reports the refusal.
+        run_init(&path, tmp.path()).unwrap_err();
+
+        // The ignore is created regardless, so re-running init backfills it for older projects.
+        let gitignore = std::fs::read_to_string(tmp.path().join(".enozunu/.gitignore")).unwrap();
+        assert_eq!(gitignore, GITIGNORE_TEMPLATE);
     }
 }

@@ -389,7 +389,7 @@ mod tests {
             entry,
             source_base,
             project_root,
-            &[entry.target_rel_path.clone()],
+            std::slice::from_ref(&entry.target_rel_path),
         )
     }
 

@@ -17,13 +17,13 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
 
       - name: Check release is ready
-        uses: tooppoo/rellog/actions/ready@main
+        uses: tooppoo/rellog/actions/ready@836a3cf053d62de4f4a1e559cef975b69e9d3831 # main
         with:
           version: "v0.1.3"
           release-id: ${{ github.ref_name }}
 
   setup-artifacts:
-    uses: tooppoo/github-release-workflows/.github/workflows/wf-cross-platform-build.yml@main
+    uses: tooppoo/github-release-workflows/.github/workflows/wf-cross-platform-build.yml@f0804df8b4ee076af2e9fbb8f276741822b5b113 # main
     needs: check-ready
     with:
       config_path: .github/workflows/artifacts.manifest.json
@@ -39,13 +39,13 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
 
       - name: Get all archives
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           name: ${{ needs.setup-artifacts.outputs.artifact_name }}
           path: dist
 
       - name: Create GitHub Release
-        uses: tooppoo/rellog/actions/create-release-note@main
+        uses: tooppoo/rellog/actions/create-release-note@836a3cf053d62de4f4a1e559cef975b69e9d3831 # main
         with:
           release-id: ${{ github.ref_name }}
           files: |

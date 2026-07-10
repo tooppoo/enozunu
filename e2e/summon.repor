@@ -1,0 +1,40 @@
+# E2E: `enozunu summon` materializes a selected source into its Claude-native path.
+#
+# Uses a `local` provider source so the happy path stays deterministic and
+# offline: a git source would depend on an external repository and the network.
+
+case "summon materializes a local skill source" {
+  write <"sources/demo-skill/SKILL.md"> ```
+    ---
+    name: demo-skill
+    description: demo skill for the summon happy path
+    ---
+
+    # Demo Skill
+    ```
+  write <"enozunu.kdl"> ```
+    enozunu config-version=1 {
+      provider {
+        skills {
+          skill "demo-skill" {
+            local {
+              path "sources/demo-skill"
+            }
+          }
+        }
+      }
+      consumer {
+        claude {
+          use-skills "demo-skill"
+        }
+      }
+    }
+    ```
+  $ enozunu summon
+  assert {
+    exit 0
+    stdout contains "materialized"
+    file <".claude/skills/demo-skill/SKILL.md"> contains "demo skill for the summon happy path"
+    file <".enozunu/provenance.json"> contains "demo-skill"
+  }
+}

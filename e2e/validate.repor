@@ -1,0 +1,45 @@
+# E2E: `enozunu validate` accepts a well-formed manifest and reports read/syntax failures.
+
+case "validate accepts a freshly initialized manifest" {
+  $ enozunu init
+  $ enozunu validate
+  assert {
+    exit 0
+    stdout contains "is valid"
+  }
+}
+
+case "validate reports a missing manifest" {
+  # Snapshot the whole stderr, not just a substring: the missing-manifest
+  # diagnostic is a single deterministic line, so a byte-for-byte fixture
+  # comparison guards its exact wording and format.
+  $ enozunu validate
+  assert {
+    exit 1
+    stderr contents_equals @"validate_missing_manifest.stderr"
+  }
+}
+
+case "validate rejects a manifest that is not valid KDL" {
+  write <"enozunu.kdl"> "not a valid manifest {{{"
+  $ enozunu validate
+  assert {
+    exit 1
+    # Substring, not a full snapshot: this diagnostic appends parser detail
+    # from the underlying `kdl` crate, which can shift across crate versions.
+    # Pin only the stable, enozunu-owned phrase that states the failure class.
+    stderr contains "not valid KDL"
+  }
+}
+
+case "validate rejects valid KDL that is not a valid manifest" {
+  write <"enozunu.kdl"> "enozunu config-version=1 { bogus-block {} }"
+  $ enozunu validate
+  assert {
+    exit 1
+    # Substring, not a full snapshot: shape validation may emit several
+    # diagnostics whose exact set and order can change as validation evolves.
+    # Pin only the phrase identifying the offending block.
+    stderr contains "unknown block"
+  }
+}

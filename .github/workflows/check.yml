@@ -33,6 +33,17 @@ jobs:
         with:
           tool: just,cargo-nextest,cargo-llvm-cov
 
+      # `just check` runs coverage-e2e (see just/coverage.just), which shells out
+      # to the reportage CLI. reportage ships via its own installer, not a
+      # registry install-action can reach, so install it here. Both the installer
+      # script and the CLI are pinned to the same released tag (matching the
+      # locally-used version) so CI stays reproducible and can't run a mutated
+      # installer off main; bump both in lockstep with local reportage upgrades.
+      - name: Install reportage
+        run: |
+          curl -fsSL https://raw.githubusercontent.com/tooppoo/reportage/refs/tags/0.0.3/install.sh | sh -s -- --version 0.0.3
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+
       - name: just check
         run: just check
 

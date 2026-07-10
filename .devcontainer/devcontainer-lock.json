@@ -9,6 +9,11 @@
       "version": "1.5.0",
       "resolved": "ghcr.io/devcontainers/features/rust@sha256:0c55e65f2e3df736e478f26ee4d5ed41bae6b54dac1318c443e31444c8ed283c",
       "integrity": "sha256:0c55e65f2e3df736e478f26ee4d5ed41bae6b54dac1318c443e31444c8ed283c"
+    },
+    "ghcr.io/tooppoo/catalog-devcontainer-features/reportage:0": {
+      "version": "0.1.0",
+      "resolved": "ghcr.io/tooppoo/catalog-devcontainer-features/reportage@sha256:7d916ddc4d0655aced79d594ee51bda0d45e1117b9f18364f5a1929d9b8a777c",
+      "integrity": "sha256:7d916ddc4d0655aced79d594ee51bda0d45e1117b9f18364f5a1929d9b8a777c"
     }
   }
 }

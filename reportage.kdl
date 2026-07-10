@@ -1,0 +1,9 @@
+reportage {
+  config {
+    version 1
+  }
+
+  tests {
+    path "e2e/**/*.repor"
+  }
+}

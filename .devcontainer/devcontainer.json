@@ -11,7 +11,8 @@
     "ghcr.io/devcontainers/features/github-cli:1": {},
     "ghcr.io/devcontainers/features/rust:1.5.0": {
       "version": "1.96.1"
-    }
+    },
+    "ghcr.io/tooppoo/catalog-devcontainer-features/reportage:0": {}
   },
   "customizations": {
     "vscode": {

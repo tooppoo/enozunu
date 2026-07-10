@@ -1,22 +1,8 @@
+import "coverage.just"
 
 # run all checks
 [group('check')]
-check: test fmt lint
-
-# run all tests and generate coverage report
-[group('check')]
-test:
-  #!/usr/bin/env sh
-  set -eu
-
-  cargo llvm-cov --locked --all-features --workspace --no-report nextest
-  cargo llvm-cov report --codecov --output-path cov.json
-  cargo llvm-cov report \
-    --fail-under-functions 80 \
-    --fail-under-lines 80 \
-    --fail-under-file-lines 80 \
-    --fail-under-regions 80 \
-    --ignore-filename-regex "src/main"
+check: coverage fmt lint
 
 # run all formatting checks
 [group('check')]

@@ -33,6 +33,17 @@ jobs:
         with:
           tool: just,cargo-nextest,cargo-llvm-cov
 
+      # `just check` runs coverage-e2e (see just/coverage.just), which shells out
+      # to the reportage CLI. Install it with the official setup action, pinned to
+      # a commit SHA (it has no release tags yet) like the other third-party
+      # actions above. `version` pins the CLI binary to the release used locally;
+      # bump it in lockstep with local reportage upgrades. Note: the action still
+      # fetches reportage's install.sh from its main branch at run time, so only
+      # the CLI binary is version-pinned, not the installer script itself.
+      - uses: tooppoo/reportage-actions/setup@57256bb4c6a89429c4c37133d1619436921263e3 # main
+        with:
+          version: "0.0.3"
+
       - name: just check
         run: just check
 

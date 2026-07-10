@@ -6,8 +6,31 @@
 use kdl::{KdlDocument, KdlNode};
 
 use crate::diagnostics::{Diagnostic, DiagnosticCode};
+use crate::git::CommitSha;
 
 pub const SUPPORTED_CONFIG_VERSION: i128 = 1;
+
+/// A validated Gist identifier: the final path segment of a Gist URL.
+///
+/// v0 accepts a non-empty lowercase ASCII hexadecimal string with no fixed length. This is a conservative accepted-input contract, not a claim that GitHub guarantees a particular Gist id length or representation.
+/// Percent-encoded and otherwise non-canonical forms are rejected because a validated id is interpolated directly into the Gist Git remote URL; Enozunu does not percent-encode arbitrary manifest input to build the remote.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct GistId(String);
+
+impl GistId {
+    /// Parses `raw` as a Gist id, returning `None` for any non-canonical form.
+    pub fn parse(raw: &str) -> Option<Self> {
+        let canonical = !raw.is_empty()
+            && raw
+                .bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b));
+        canonical.then(|| Self(raw.to_owned()))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
 
 /// A manifest that passed schema validation.
 ///
@@ -30,9 +53,10 @@ pub struct SourceDecl {
     pub reference: SourceReference,
 }
 
-/// A tagged source reference: exactly one `git` or `local` block per source declaration.
+/// A tagged source reference: exactly one `git`, `local`, or `gist` block per source declaration.
 ///
-/// v0.0.x accepts only these two kinds; shorthand forms are rejected during validation.
+/// v0.0.x accepts only these kinds; shorthand forms are rejected during validation.
+/// `gist` is accepted only under `provider.agents`; a `gist` block under `provider.skills` is rejected.
 /// See docs/manifest.md for the supported source reference policy.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SourceReference {
@@ -43,6 +67,11 @@ pub enum SourceReference {
     },
     Local {
         path: String,
+    },
+    Gist {
+        id: GistId,
+        revision: CommitSha,
+        file: String,
     },
 }
 
@@ -229,6 +258,7 @@ fn parse_source_reference(
 ) -> Option<SourceReference> {
     let mut git_blocks = Vec::new();
     let mut local_blocks = Vec::new();
+    let mut gist_blocks = Vec::new();
     let mut ok = true;
 
     if let Some(children) = node.children() {
@@ -236,6 +266,7 @@ fn parse_source_reference(
             match block.name().value() {
                 "git" => git_blocks.push(block),
                 "local" => local_blocks.push(block),
+                "gist" => gist_blocks.push(block),
                 // `branch` and `path` were top-level fields before source reference blocks existed, so their appearance here most likely means an unmigrated manifest.
                 other @ ("branch" | "path" | "url") => {
                     diags.push(Diagnostic::new(
@@ -250,7 +281,7 @@ fn parse_source_reference(
                     diags.push(Diagnostic::new(
                         DiagnosticCode::UnsupportedSourceReference,
                         format!(
-                            "{kind} `{name}` uses unsupported source reference block `{other}`; supported blocks are `git` and `local`"
+                            "{kind} `{name}` uses unsupported source reference block `{other}`; supported blocks are `git`, `local`, and `gist`"
                         ),
                     ));
                     ok = false;
@@ -259,34 +290,47 @@ fn parse_source_reference(
         }
     }
 
-    let reference = match (git_blocks.as_slice(), local_blocks.as_slice()) {
-        ([git], []) => parse_git_reference(git, kind, name, diags),
-        ([], [local]) => parse_local_reference(local, kind, name, diags),
-        ([], []) => {
-            diags.push(Diagnostic::new(
-                DiagnosticCode::ManifestShape,
-                format!(
-                    "{kind} `{name}` must contain exactly one source reference block (`git` or `local`)"
-                ),
-            ));
+    // Gist sources are agent-only in this Issue; a `gist` block under `provider.skills` is rejected rather than parsed.
+    if kind != "agent" && !gist_blocks.is_empty() {
+        diags.push(Diagnostic::new(
+            DiagnosticCode::UnsupportedSourceReference,
+            format!(
+                "{kind} `{name}` uses a `gist` source reference block, which is supported only for agents"
+            ),
+        ));
+        ok = false;
+    }
+
+    let total = git_blocks.len() + local_blocks.len() + gist_blocks.len();
+    let reference = if total == 0 {
+        diags.push(Diagnostic::new(
+            DiagnosticCode::ManifestShape,
+            format!(
+                "{kind} `{name}` must contain exactly one source reference block (`git`, `local`, or `gist`)"
+            ),
+        ));
+        None
+    } else if total > 1 {
+        diags.push(Diagnostic::new(
+            DiagnosticCode::ManifestShape,
+            format!(
+                "{kind} `{name}` declares {total} source reference blocks; exactly one is allowed"
+            ),
+        ));
+        None
+    } else if let [git] = git_blocks.as_slice() {
+        parse_git_reference(git, kind, name, diags)
+    } else if let [local] = local_blocks.as_slice() {
+        parse_local_reference(local, kind, name, diags)
+    } else if let [gist] = gist_blocks.as_slice() {
+        // A `gist` under a non-agent kind is already reported above; do not also emit field-level diagnostics for it.
+        if kind == "agent" {
+            parse_gist_reference(gist, kind, name, diags)
+        } else {
             None
         }
-        (git, local) => {
-            let found = if !git.is_empty() && !local.is_empty() {
-                "both `git` and `local` blocks".to_owned()
-            } else if git.len() > 1 {
-                format!("{} `git` blocks", git.len())
-            } else {
-                format!("{} `local` blocks", local.len())
-            };
-            diags.push(Diagnostic::new(
-                DiagnosticCode::ManifestShape,
-                format!(
-                    "{kind} `{name}` declares {found}; exactly one source reference block is allowed"
-                ),
-            ));
-            None
-        }
+    } else {
+        None
     };
 
     if ok { reference } else { None }
@@ -462,6 +506,119 @@ fn parse_local_reference(
     }
 
     Some(SourceReference::Local { path })
+}
+
+fn parse_gist_reference(
+    node: &KdlNode,
+    kind: &str,
+    name: &str,
+    diags: &mut Vec<Diagnostic>,
+) -> Option<SourceReference> {
+    if first_string_arg(node).is_some() {
+        diags.push(Diagnostic::new(
+            DiagnosticCode::ManifestShape,
+            format!(
+                "`gist` block of {kind} `{name}` takes no argument; declare `id`, `revision`, and `file` inside the block"
+            ),
+        ));
+        return None;
+    }
+
+    let mut id = None;
+    let mut revision = None;
+    let mut file = None;
+    let mut ok = true;
+
+    if let Some(children) = node.children() {
+        for field in children.nodes() {
+            let field_name = field.name().value();
+            let value = first_string_arg(field);
+            // A repeated field is a shape error rather than last-value-wins, so a manifest cannot silently pin a different revision than the one it appears to declare.
+            let slot = match field_name {
+                "id" => Some(&mut id),
+                "revision" => Some(&mut revision),
+                "file" => Some(&mut file),
+                _ => None,
+            };
+            match (slot, value) {
+                (Some(slot), Some(v)) => {
+                    if slot.is_some() {
+                        diags.push(Diagnostic::new(
+                            DiagnosticCode::ManifestShape,
+                            format!(
+                                "`gist` block of {kind} `{name}` declares `{field_name}` more than once"
+                            ),
+                        ));
+                        ok = false;
+                    } else {
+                        *slot = Some(v);
+                    }
+                }
+                (Some(_), None) => {
+                    diags.push(Diagnostic::new(
+                        DiagnosticCode::ManifestShape,
+                        format!("`{field_name}` of {kind} `{name}` must have a string value"),
+                    ));
+                    ok = false;
+                }
+                (None, _) => {
+                    diags.push(Diagnostic::new(
+                        DiagnosticCode::UnsupportedSourceReference,
+                        format!(
+                            "`gist` block of {kind} `{name}` uses unsupported field `{field_name}`; it accepts only id + revision + file"
+                        ),
+                    ));
+                    ok = false;
+                }
+            }
+        }
+    }
+
+    for (field, value) in [("id", &id), ("revision", &revision), ("file", &file)] {
+        if value.is_none() {
+            diags.push(Diagnostic::new(
+                DiagnosticCode::ManifestShape,
+                format!("`gist` block of {kind} `{name}` is missing required field `{field}`"),
+            ));
+            ok = false;
+        }
+    }
+
+    if !ok {
+        return None;
+    }
+
+    let id_raw = id.unwrap();
+    let revision_raw = revision.unwrap();
+    let file = file.unwrap();
+
+    let Some(id) = GistId::parse(&id_raw) else {
+        diags.push(Diagnostic::new(
+            DiagnosticCode::InvalidGistId,
+            format!(
+                "`id` of {kind} `{name}` (`{id_raw}`) must be a non-empty lowercase hexadecimal Gist id"
+            ),
+        ));
+        return None;
+    };
+
+    let Some(revision) = CommitSha::parse(&revision_raw) else {
+        diags.push(Diagnostic::new(
+            DiagnosticCode::InvalidRevision,
+            format!(
+                "`revision` of {kind} `{name}` (`{revision_raw}`) must be exactly 40 lowercase hexadecimal characters"
+            ),
+        ));
+        return None;
+    };
+
+    // The `file` path follows the same safe-relative-path policy as a Git source path; it is resolved and containment-checked against the Gist checkout during materialization.
+    if let Err(d) = validate_source_path(&file, kind, name) {
+        diags.push(d);
+        return None;
+    }
+
+    Some(SourceReference::Gist { id, revision, file })
 }
 
 fn parse_consumer(node: &KdlNode, diags: &mut Vec<Diagnostic>) -> Consumer {
@@ -1074,5 +1231,207 @@ enozunu config-version=1 {
 }
 "#;
         assert!(codes(parse(text)).contains(&DiagnosticCode::UnsupportedSourceReference));
+    }
+
+    /// Wraps a `gist { ... }` block body in an agent declaration, without selecting it, so tests exercise gist parsing in isolation.
+    fn agent_gist(gist_body: &str) -> String {
+        format!(
+            r#"
+enozunu config-version=1 {{
+  provider {{
+    agents {{
+      agent "reviewer" {{
+        gist {{
+{gist_body}
+        }}
+      }}
+    }}
+  }}
+  consumer {{ claude {{}} }}
+}}
+"#
+        )
+    }
+
+    #[test]
+    fn parses_valid_gist_agent() {
+        let text = r#"
+enozunu config-version=1 {
+  provider {
+    agents {
+      agent "shell-script-reviewer" {
+        gist {
+          id "2decf6c462d9b4418f2"
+          revision "468aac8caed5f0c3b859b8286968e2c78e2b8760"
+          file "shell-script-reviewer.md"
+        }
+      }
+    }
+  }
+  consumer { claude { use-agents "shell-script-reviewer" } }
+}
+"#;
+        let manifest = parse(text).unwrap();
+        let SourceReference::Gist { id, revision, file } = &manifest.provider.agents[0].reference
+        else {
+            panic!("expected a gist source reference");
+        };
+        assert_eq!(id.as_str(), "2decf6c462d9b4418f2");
+        assert_eq!(
+            revision.as_str(),
+            "468aac8caed5f0c3b859b8286968e2c78e2b8760"
+        );
+        assert_eq!(file, "shell-script-reviewer.md");
+    }
+
+    #[test]
+    fn rejects_gist_under_a_skill() {
+        let text = r#"
+enozunu config-version=1 {
+  provider {
+    skills {
+      skill "a" {
+        gist {
+          id "2decf6c462d9b4418f2"
+          revision "468aac8caed5f0c3b859b8286968e2c78e2b8760"
+          file "a.md"
+        }
+      }
+    }
+  }
+  consumer { claude {} }
+}
+"#;
+        assert!(codes(parse(text)).contains(&DiagnosticCode::UnsupportedSourceReference));
+    }
+
+    #[test]
+    fn rejects_gist_combined_with_git() {
+        let text = r#"
+enozunu config-version=1 {
+  provider {
+    agents {
+      agent "reviewer" {
+        gist {
+          id "2decf6c462d9b4418f2"
+          revision "468aac8caed5f0c3b859b8286968e2c78e2b8760"
+          file "a.md"
+        }
+        git {
+          url "https://example.com/r"
+          branch "main"
+          path "a.md"
+        }
+      }
+    }
+  }
+  consumer { claude {} }
+}
+"#;
+        assert!(codes(parse(text)).contains(&DiagnosticCode::ManifestShape));
+    }
+
+    #[test]
+    fn rejects_multiple_gist_blocks() {
+        let text = r#"
+enozunu config-version=1 {
+  provider {
+    agents {
+      agent "reviewer" {
+        gist {
+          id "2decf6c462d9b4418f2"
+          revision "468aac8caed5f0c3b859b8286968e2c78e2b8760"
+          file "a.md"
+        }
+        gist {
+          id "2decf6c462d9b4418f2"
+          revision "468aac8caed5f0c3b859b8286968e2c78e2b8760"
+          file "b.md"
+        }
+      }
+    }
+  }
+  consumer { claude {} }
+}
+"#;
+        assert!(codes(parse(text)).contains(&DiagnosticCode::ManifestShape));
+    }
+
+    #[test]
+    fn rejects_gist_missing_required_field() {
+        let text = agent_gist(
+            r#"          id "2decf6c462d9b4418f2"
+          file "a.md""#,
+        );
+        assert!(codes(parse(&text)).contains(&DiagnosticCode::ManifestShape));
+    }
+
+    #[test]
+    fn rejects_duplicate_gist_field() {
+        let text = agent_gist(
+            r#"          id "2decf6c462d9b4418f2"
+          revision "468aac8caed5f0c3b859b8286968e2c78e2b8760"
+          revision "468aac8caed5f0c3b859b8286968e2c78e2b8760"
+          file "a.md""#,
+        );
+        assert!(codes(parse(&text)).contains(&DiagnosticCode::ManifestShape));
+    }
+
+    #[test]
+    fn rejects_unknown_gist_field() {
+        let text = agent_gist(
+            r#"          id "2decf6c462d9b4418f2"
+          revision "468aac8caed5f0c3b859b8286968e2c78e2b8760"
+          file "a.md"
+          owner "monalisa""#,
+        );
+        assert!(codes(parse(&text)).contains(&DiagnosticCode::UnsupportedSourceReference));
+    }
+
+    #[test]
+    fn rejects_non_canonical_gist_id() {
+        for id in ["2DECF6C462D9B4418F2", "2decf6c4%62d9", "not-hex", ""] {
+            let text = agent_gist(&format!(
+                r#"          id "{id}"
+          revision "468aac8caed5f0c3b859b8286968e2c78e2b8760"
+          file "a.md""#
+            ));
+            assert!(
+                codes(parse(&text)).contains(&DiagnosticCode::InvalidGistId),
+                "id `{id}` must be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_unsupported_revision_forms() {
+        for revision in [
+            "468aac8",                                   // abbreviated
+            "468AAC8CAED5F0C3B859B8286968E2C78E2B8760",  // uppercase
+            "468aac8caed5f0c3b859b8286968e2c78e2b8760a", // too long
+            // 64-char SHA-256 object id
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "main", // branch name
+        ] {
+            let text = agent_gist(&format!(
+                r#"          id "2decf6c462d9b4418f2"
+          revision "{revision}"
+          file "a.md""#
+            ));
+            assert!(
+                codes(parse(&text)).contains(&DiagnosticCode::InvalidRevision),
+                "revision `{revision}` must be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_unsafe_gist_file_path() {
+        let text = agent_gist(
+            r#"          id "2decf6c462d9b4418f2"
+          revision "468aac8caed5f0c3b859b8286968e2c78e2b8760"
+          file "../escape.md""#,
+        );
+        assert!(codes(parse(&text)).contains(&DiagnosticCode::UnsafePath));
     }
 }

@@ -29,6 +29,8 @@ pub struct ProvenanceEntry {
 }
 
 /// Source-kind-specific provenance fields, tagged so consumers can dispatch on `type` instead of probing for Git-only fields.
+///
+/// A Gist source records `type: "gist"` with its id, pinned revision, and selected file; it is never represented as `type: "git"` even though Git transport materialized it.
 #[derive(Debug, Serialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum ProvenanceSource {
@@ -41,6 +43,11 @@ pub enum ProvenanceSource {
     Local {
         path: String,
         resolved_path: String,
+    },
+    Gist {
+        id: String,
+        revision: String,
+        file: String,
     },
 }
 

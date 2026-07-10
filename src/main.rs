@@ -83,18 +83,12 @@ fn main() -> ExitCode {
             let resolver = CommandGitResolver::new(project_root.join(".enozunu/cache"));
             enozunu::run_materialize(&manifest_path, &project_root, &resolver).map(|entries| {
                 for entry in &entries {
-                    let origin = match &entry.origin {
-                        enozunu::ResolvedOrigin::Git { revision } => revision.clone(),
-                        enozunu::ResolvedOrigin::Local { resolved_path } => {
-                            format!("local: {resolved_path}")
-                        }
-                    };
                     println!(
                         "materialized {} `{}` -> {} ({})",
                         entry.kind.as_str(),
                         entry.source_name,
                         entry.target_rel_path,
-                        origin
+                        entry.origin.describe()
                     );
                 }
                 println!(

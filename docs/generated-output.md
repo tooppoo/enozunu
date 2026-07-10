@@ -117,6 +117,15 @@ For a local source, the `source` object records:
 - `path` (as written in the manifest)
 - `resolved_path` (the canonical filesystem path)
 
+For a Gist source, the `source` object records:
+
+- `type` (`"gist"`)
+- `id`
+- `revision`
+- `file`
+
+A Gist source is recorded as `type: "gist"`, never as `type: "git"`, even though Git transport materializes it. The recorded `revision` equals the pinned Gist revision.
+
 `provenance.json` is not a lockfile.
 It is not used as a resolution input in v0.0.x.
 

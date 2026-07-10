@@ -10,10 +10,13 @@ case "validate accepts a freshly initialized manifest" {
 }
 
 case "validate reports a missing manifest" {
+  # Snapshot the whole stderr, not just a substring: the missing-manifest
+  # diagnostic is a single deterministic line, so a byte-for-byte fixture
+  # comparison guards its exact wording and format.
   $ enozunu validate
   assert {
     exit 1
-    stderr contains "failed to read"
+    stderr contents_equals @"validate_missing_manifest.stderr"
   }
 }
 

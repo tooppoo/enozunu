@@ -25,6 +25,9 @@ case "validate rejects a manifest that is not valid KDL" {
   $ enozunu validate
   assert {
     exit 1
+    # Substring, not a full snapshot: this diagnostic appends parser detail
+    # from the underlying `kdl` crate, which can shift across crate versions.
+    # Pin only the stable, enozunu-owned phrase that states the failure class.
     stderr contains "not valid KDL"
   }
 }
@@ -34,6 +37,9 @@ case "validate rejects valid KDL that is not a valid manifest" {
   $ enozunu validate
   assert {
     exit 1
+    # Substring, not a full snapshot: shape validation may emit several
+    # diagnostics whose exact set and order can change as validation evolves.
+    # Pin only the phrase identifying the offending block.
     stderr contains "unknown block"
   }
 }

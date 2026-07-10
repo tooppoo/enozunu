@@ -1,0 +1,19 @@
+# E2E: `enozunu init` scaffolds a manifest and refuses to clobber an existing one.
+
+case "init creates a manifest in an empty project" {
+  $ enozunu init
+  assert {
+    exit 0
+    stdout contains "created"
+    file <"enozunu.kdl"> exists
+  }
+}
+
+case "init refuses to overwrite an existing manifest" {
+  $ enozunu init
+  $ enozunu init
+  assert {
+    exit 1
+    stderr contains "refusing to overwrite"
+  }
+}

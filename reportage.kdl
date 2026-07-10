@@ -3,6 +3,12 @@ reportage {
     version 1
   }
 
+  commands {
+    command "enozunu" {
+      exec "bin/shim"
+    }
+  }
+
   tests {
     path "e2e/**/*.repor"
   }

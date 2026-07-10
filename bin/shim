@@ -1,0 +1,50 @@
+#!/bin/sh
+set -eu
+
+# Scaffolded by reportage.
+# This file is owned by this project after generation.
+#
+# entry_point is a cargo binary target name (`cargo build --bin`), not a file path.
+#
+# `--quiet` keeps a successful build silent: cargo's normal progress output goes to stderr, which a test asserting on this command's stderr would not expect.
+#
+# A command wired up through reportage runs with the case workspace as its working directory, and enozunu resolves manifest paths against that working directory.
+# The shim must therefore exec enozunu with that working directory untouched: otherwise the binary would read and write this project's own enozunu.kdl instead of the case's files.
+# A build, in contrast, must run from this project's root (resolved once as an absolute path) so cargo and rustup resolve this project's Cargo.toml, .cargo config, and pinned toolchain; the default branch below cds there in a subshell for the build only, never for the exec. The merge branch does not build.
+#
+# Coverage is not collected here directly. It is driven by `just coverage-e2e` /
+# `just coverage-merged`, which build an instrumented binary under an outer
+# `cargo llvm-cov` session and hand it to the merge branch below. The plain
+# `reportage` path stays uninstrumented so running the e2e suite for a pass/fail
+# check does not pay build-and-profile overhead.
+
+project_root="$(CDPATH= cd -- "$(dirname -- "$0")/.." && pwd)"
+
+# Must match the `bin` variable in just/coverage.just, which reports on the same target.
+entry_point='enozunu'
+
+# Merge mode: an outer `cargo llvm-cov` session (see just/coverage.just) has
+# already built the instrumented binary and owns the directory it collects
+# .profraw from. Defer to that binary and write into that directory so the e2e
+# run merges into the same profile as the Rust tests. Building our own binary
+# here would produce a separate profile whose coverage maps do not match, so it
+# could not be merged with the test profile.
+if [ -n "${ENOZUNU_COV_BIN:-}" ]; then
+  cov_profraw="${ENOZUNU_COV_PROFRAW:?merge mode needs ENOZUNU_COV_PROFRAW}"
+  # LLVM writes one .profraw per run (%p is the pid, %m the binary signature),
+  # so invocations accumulate here. The caller normally creates this directory,
+  # but create it too so coverage is never silently dropped.
+  mkdir -p "$cov_profraw"
+  export LLVM_PROFILE_FILE="$cov_profraw/enozunu-%p-%m.profraw"
+  exec "$ENOZUNU_COV_BIN" "$@"
+fi
+
+# Default (no coverage): build the CLI, then run it in the case workspace.
+# rustup resolves this project's rust-toolchain.toml (and cargo its .cargo config)
+# from the build's working directory, not from --manifest-path, so cd into the
+# project root for the build only, inside a subshell. The exec still runs with
+# the caller's working directory — the case workspace — so enozunu resolves the
+# case's manifest, while the build uses the pinned toolchain and this project's
+# normal target/ cache. Nothing here is coverage-instrumented.
+( cd "$project_root" && cargo build --quiet --bin "$entry_point" )
+exec "$project_root/target/debug/$entry_point" "$@"

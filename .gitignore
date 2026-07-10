@@ -1,6 +1,8 @@
 # Rust build outputs
 /target
 /dist
+# raw coverage profiles an instrumented binary can drop in its working directory
+*.profraw
 
 # test
 cov.json

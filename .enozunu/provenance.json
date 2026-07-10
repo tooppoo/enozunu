@@ -9,7 +9,7 @@
         "url": "https://github.com/tooppoo/catalog-agent-tools",
         "branch": "main",
         "path": "common/skills/documentation-writing",
-        "resolved_revision": "ac326ccbe0ae2888a6ca5af20e21e44ca9f9a7de"
+        "resolved_revision": "e77f9ce841c81a9e80a0f5876def5517ea29a74f"
       },
       "target_ai": "claude",
       "target_path": ".claude/skills/documentation-writing"
@@ -22,7 +22,7 @@
         "url": "https://github.com/tooppoo/catalog-agent-tools",
         "branch": "main",
         "path": "common/skills/subagent-review-loop",
-        "resolved_revision": "ac326ccbe0ae2888a6ca5af20e21e44ca9f9a7de"
+        "resolved_revision": "e77f9ce841c81a9e80a0f5876def5517ea29a74f"
       },
       "target_ai": "claude",
       "target_path": ".claude/skills/subagent-review-loop"
@@ -35,7 +35,7 @@
         "url": "https://github.com/tooppoo/catalog-agent-tools",
         "branch": "main",
         "path": "common/skills/code-comment",
-        "resolved_revision": "ac326ccbe0ae2888a6ca5af20e21e44ca9f9a7de"
+        "resolved_revision": "e77f9ce841c81a9e80a0f5876def5517ea29a74f"
       },
       "target_ai": "claude",
       "target_path": ".claude/skills/code-comment"
@@ -48,7 +48,7 @@
         "url": "https://github.com/tooppoo/catalog-agent-tools",
         "branch": "main",
         "path": "common/skills/cli-output-design",
-        "resolved_revision": "ac326ccbe0ae2888a6ca5af20e21e44ca9f9a7de"
+        "resolved_revision": "e77f9ce841c81a9e80a0f5876def5517ea29a74f"
       },
       "target_ai": "claude",
       "target_path": ".claude/skills/cli-output-design"
@@ -61,7 +61,7 @@
         "url": "https://github.com/tooppoo/catalog-agent-tools",
         "branch": "main",
         "path": "common/skills/reportage",
-        "resolved_revision": "ac326ccbe0ae2888a6ca5af20e21e44ca9f9a7de"
+        "resolved_revision": "e77f9ce841c81a9e80a0f5876def5517ea29a74f"
       },
       "target_ai": "claude",
       "target_path": ".claude/skills/reportage"

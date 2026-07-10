@@ -229,3 +229,59 @@ fn propagates_a_gist_revision_not_found_failure() {
             .any(|d| d.code == DiagnosticCode::GistRevisionNotFound)
     );
 }
+
+#[test]
+fn rejects_a_gist_file_that_is_not_a_regular_file() {
+    // `file` points at a directory inside the checkout rather than an agent file.
+    let (_c, checkout) = checkout_with(&[]);
+    fs::create_dir_all(checkout.join("a-directory")).unwrap();
+    let (_p, root) = project_with_agents(&[("reviewer", "a-directory")]);
+    let transport = FakeTransport::ok(checkout);
+
+    let diags = run_materialize(&root.join("enozunu.kdl"), &root, &transport).unwrap_err();
+
+    assert!(
+        diags
+            .iter()
+            .any(|d| d.code == DiagnosticCode::ArtifactShape)
+    );
+    assert!(!root.join(".claude").exists());
+}
+
+#[test]
+#[cfg(unix)]
+fn accepts_a_gist_file_symlinked_to_a_regular_file_inside_the_checkout() {
+    use std::os::unix::fs::symlink;
+    // `file` is a symlink whose canonical target is a regular file that stays inside the checkout.
+    let (_c, checkout) = checkout_with(&[("target.md", "# linked reviewer\n")]);
+    symlink("target.md", checkout.join("link.md")).unwrap();
+    let (_p, root) = project_with_agents(&[("reviewer", "link.md")]);
+    let transport = FakeTransport::ok(checkout);
+
+    run_materialize(&root.join("enozunu.kdl"), &root, &transport).unwrap();
+
+    assert_eq!(
+        fs::read_to_string(root.join(".claude/agents/reviewer.md")).unwrap(),
+        "# linked reviewer\n"
+    );
+}
+
+#[test]
+#[cfg(unix)]
+fn rejects_a_gist_file_symlink_that_escapes_the_checkout() {
+    use std::os::unix::fs::symlink;
+    // `file` is a symlink whose target is a real file outside the checkout, so it escapes containment.
+    let (_c, checkout) = checkout_with(&[]);
+    let outside = checkout.parent().unwrap().join("outside.md");
+    fs::write(&outside, "# outside\n").unwrap();
+    symlink("../outside.md", checkout.join("escape.md")).unwrap();
+    let (_p, root) = project_with_agents(&[("reviewer", "escape.md")]);
+    let transport = FakeTransport::ok(checkout);
+
+    let diags = run_materialize(&root.join("enozunu.kdl"), &root, &transport).unwrap_err();
+
+    assert!(diags.iter().any(|d| d.code == DiagnosticCode::UnsafePath));
+    assert!(!root.join(".claude").exists());
+    // The escaped source must survive the rejected run untouched.
+    assert_eq!(fs::read_to_string(&outside).unwrap(), "# outside\n");
+}

@@ -26,6 +26,21 @@ enozunu config-version=1 {
         }
       }
 
+      skill "cli-output-design" {
+        git {
+          url "https://github.com/tooppoo/catalog-agent-tools"
+          branch "main"
+          path "common/skills/cli-output-design"
+        }
+      }
+
+      skill "reportage" {
+        git {
+          url "https://github.com/tooppoo/catalog-agent-tools"
+          branch "main"
+          path "common/skills/reportage"
+        }
+      }
     }
 
     // agents {
@@ -42,7 +57,11 @@ enozunu config-version=1 {
   // `consumer` selects what to materialize for each target AI.
   consumer {
     claude {
-      use-skills "documentation-writing" "subagent-review-loop" "code-comment"
+      use-skills "documentation-writing" \
+        "subagent-review-loop" \
+        "code-comment" \
+        "cli-output-design" \
+        "reportage"
     }
   }
 }

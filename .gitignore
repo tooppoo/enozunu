@@ -13,3 +13,4 @@ cov.json
 # other
 *.lock
 *.local.json
+tmp/

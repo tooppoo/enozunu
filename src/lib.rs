@@ -17,7 +17,7 @@ use std::path::Path;
 use diagnostics::{Diagnostic, DiagnosticCode};
 use gist::{GistRequest, GistResolver, GitTransportGistResolver};
 use git::{GitError, GitResolutionRequest, GitResolver, GitSelector, ResolvedSource};
-use manifest::SourceReference;
+use manifest::{GistArtifactSelector, SourceReference};
 use plan::PlannedMaterialization;
 use provenance::{ProvenanceEntry, ProvenanceRecord, ProvenanceSource};
 
@@ -100,11 +100,11 @@ pub fn run_materialize(
     for entry in &planned {
         let source_base = match &entry.reference {
             SourceReference::Git { url, branch, .. } => {
-                &resolved[&(url.clone(), branch.clone())].checkout_dir
+                &resolved[&(url.clone(), branch.clone())].content_root
             }
             SourceReference::Local { .. } => manifest_dir,
             SourceReference::Gist { id, revision, .. } => {
-                &resolved_gists[&gist_key(id, revision)].checkout_dir
+                &resolved_gists[&gist_key(id, revision)].content_root
             }
         };
         match materialize::check(entry, source_base, project_root, &target_rel_paths) {
@@ -178,11 +178,15 @@ fn provenance_source(reference: &SourceReference, origin: &ResolvedOrigin) -> Pr
             }
         }
         // The resolved revision equals the pinned revision (checkout is verified against it), so it is recorded as `gist`, never as `git`, even though Git transport produced it.
-        (SourceReference::Gist { file, .. }, ResolvedOrigin::Gist { id, revision }) => {
+        (SourceReference::Gist { selector, .. }, ResolvedOrigin::Gist { id, revision }) => {
             ProvenanceSource::Gist {
                 id: id.clone(),
                 revision: revision.clone(),
-                file: file.clone(),
+                // A root-selecting Skill Gist records no `file`, keeping the provenance shape aligned with the manifest contract.
+                file: match selector {
+                    GistArtifactSelector::Root => None,
+                    GistArtifactSelector::File { path } => Some(path.clone()),
+                },
             }
         }
         // The origin is constructed from the reference in run_materialize, so the variants always match.
@@ -190,9 +194,9 @@ fn provenance_source(reference: &SourceReference, origin: &ResolvedOrigin) -> Pr
     }
 }
 
-/// The immutable cache key for a Gist checkout: `(id, revision)`.
+/// The immutable cache key for a resolved Gist: `(id, revision)`.
 ///
-/// The selected file is not part of the key, so multiple agents selecting different files from one Gist revision share a single resolved checkout.
+/// The artifact kind and selector are not part of the key, so Skill and agent sources referencing one Gist revision share a single resolved content tree.
 fn gist_key(id: &manifest::GistId, revision: &git::CommitSha) -> (String, String) {
     (id.as_str().to_owned(), revision.as_str().to_owned())
 }
@@ -244,7 +248,7 @@ fn git_error_diagnostic(error: GitError) -> Diagnostic {
     }
 }
 
-/// Resolves each distinct Gist `(id, revision)` once so agents selecting different files from the same revision share one checkout.
+/// Resolves each distinct Gist `(id, revision)` once so every source referencing that revision — Skill or agent — shares one exported content tree.
 fn resolve_gist_sources(
     planned: &[PlannedMaterialization],
     resolver: &dyn GistResolver,

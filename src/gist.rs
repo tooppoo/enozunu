@@ -10,9 +10,9 @@ use crate::git::{
 };
 use crate::manifest::GistId;
 
-/// The immutable identity of a Gist checkout: an id and a pinned revision.
+/// The immutable identity of a resolved Gist: an id and a pinned revision.
 ///
-/// The selected `file` is not part of this identity, so multiple agents selecting different files from the same Gist revision resolve to one shared checkout.
+/// The artifact kind and selector are not part of this identity, so Skill and agent sources referencing the same Gist revision resolve to one shared content tree.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GistRequest {
     pub id: GistId,
@@ -20,7 +20,7 @@ pub struct GistRequest {
 }
 
 pub trait GistResolver {
-    /// Resolves a Gist revision to a local checkout.
+    /// Resolves a Gist revision to an exported content tree.
     fn resolve(&self, request: &GistRequest) -> Result<ResolvedSource, Diagnostic>;
 }
 
@@ -126,7 +126,7 @@ mod tests {
     fn drives_the_transport_with_an_exact_revision_selector() {
         let resolved = ResolvedSource {
             commit: commit_sha().as_str().to_owned(),
-            checkout_dir: PathBuf::from("/tmp/checkout"),
+            content_root: PathBuf::from("/tmp/content"),
         };
         let git = FakeGit::new(Ok(resolved));
         let resolver = GitTransportGistResolver::new(&git);

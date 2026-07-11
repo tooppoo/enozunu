@@ -99,14 +99,11 @@ local
 gist
 ```
 
-The `gist` block is accepted only under `provider.agents`. A `gist` block under `provider.skills` is rejected.
-
 The following are invalid:
 
 - no source reference block
 - more than one source reference block in one declaration, in any combination
 - unsupported source reference blocks
-- a `gist` block under a Skill declaration
 
 The rationale for the block structure is recorded in [the source reference blocks ADR](../design/adr/20260709T070553Z_source-reference-blocks-and-local-sources.md). The rationale for `gist` as a distinct source kind is recorded in [the Gist source reference ADR](../design/adr/20260710T220338Z_gist-first-class-source-reference.md).
 
@@ -168,7 +165,22 @@ Target paths are canonicalized through any existing symlinked ancestors before t
 
 ### Gist Source Reference
 
-A Gist source distributes a single agent file as a GitHub Gist, without requiring a full repository.
+A Gist source distributes a Skill or an agent as a GitHub Gist, without requiring a full repository.
+
+The `gist` block contract differs by artifact kind.
+
+A Skill Gist declares `id` and `revision`; the root of the pinned Gist revision is the Skill artifact:
+
+```kdl
+skill "semantic-line-breaks" {
+  gist {
+    id "2decf6c462d9b4418f2"
+    revision "468aac8caed5f0c3b859b8286968e2c78e2b8760"
+  }
+}
+```
+
+An agent Gist additionally requires `file`, which selects a single agent file:
 
 ```kdl
 agent "shell-script-reviewer" {
@@ -183,9 +195,8 @@ agent "shell-script-reviewer" {
 Required fields:
 
 ```text
-id
-revision
-file
+skill: id + revision
+agent: id + revision + file
 ```
 
 Semantics:
@@ -193,7 +204,9 @@ Semantics:
 - `id` is the unique Gist identifier from the final path segment of a Gist URL, such as `2decf6c462d9b4418f2` in `https://gist.github.com/monalisa/2decf6c462d9b4418f2`.
 - The manifest does not require the Gist owner: the resolver builds the Git remote `https://gist.github.com/<id>.git` from the id alone.
 - `revision` pins the exact Gist commit to materialize.
-- `file` is the agent artifact path relative to the root of the checked-out Gist revision.
+- For a Skill, the root of the pinned Gist revision is the Skill artifact root. It must contain a regular-file `SKILL.md`, and the whole tree is materialized to `.claude/skills/<name>/`.
+- For an agent, `file` is the agent artifact path relative to the root of the checked-out Gist revision.
+- A `file` field inside a Skill Gist is rejected, and no `path` field exists to select a nested Skill root.
 
 `id` must be a non-empty lowercase ASCII hexadecimal string:
 
@@ -215,11 +228,13 @@ A latest, branch, tag, abbreviated, uppercase, whitespace-padded, or SHA-256 rev
 
 - it must be relative
 - it must not contain empty or `..` segments
-- it must resolve to a regular file inside the Gist checkout
+- it must resolve to a regular file inside the resolved Gist content
 
-A Gist source is materialized to `.claude/agents/<name>.md`, the same target as an agent Git source.
+An agent Gist source is materialized to `.claude/agents/<name>.md`, the same target as an agent Git source.
 
-Gist resolution uses Git transport internally, but a Gist remains a distinct source kind: it is never recorded or reported as an ordinary Git source. Gist support is limited to agents in this version; Skill support from Gists is deferred.
+Skill Gist trees follow the same validation policy as other Skill sources, including the symlink rejection policy.
+
+Gist resolution uses Git transport internally, but a Gist remains a distinct source kind: it is never recorded or reported as an ordinary Git source. Skill and agent sources referencing the same `(id, revision)` in one run are resolved once and share the resolved content. The Skill artifact root decision is recorded in [the pinned Gist root ADR](../design/adr/20260711T144232Z_use-pinned-gist-root-as-skill-artifact-root.md).
 
 ## Consumer Block
 
@@ -288,8 +303,8 @@ Git tag selector
 Git latest selector
 Git version range
 absolute local paths
-Gist Skill sources
 Gist branch, tag, or abbreviated revision selectors
+nested Skill root selection inside a Gist
 ```
 
 An exact revision is supported only for Gist sources, through the dedicated `gist` block, not for Git source references.
@@ -318,8 +333,9 @@ v0.0.x should reject:
 - symlinked `local` source paths
 - `local` source paths overlapping their materialization target paths
 - multiple sources materializing to the same target path
-- `gist` blocks under `provider.skills`
 - missing, duplicate, or unknown `gist` fields
+- `file` fields inside Skill `gist` blocks
+- Skill Gist revisions whose root does not contain a regular-file `SKILL.md`
 - non-canonical Gist ids
 - revisions that are not exactly 40 lowercase hexadecimal characters
 - unsafe `gist` `file` paths
@@ -345,6 +361,13 @@ enozunu config-version=1 {
           path "../reportage/.claude/skills/git-kura"
         }
       }
+
+      skill "semantic-line-breaks" {
+        gist {
+          id "2decf6c462d9b4418f2"
+          revision "468aac8caed5f0c3b859b8286968e2c78e2b8760"
+        }
+      }
     }
 
     agents {
@@ -368,7 +391,7 @@ enozunu config-version=1 {
 
   consumer {
     claude {
-      use-skills "git-kura" "local-git-kura"
+      use-skills "git-kura" "local-git-kura" "semantic-line-breaks"
       use-agents "shell-script-reviewer" "gist-reviewer"
     }
   }

@@ -1,10 +1,14 @@
-//! Resolves Git source references to concrete commits and local checkouts.
+//! Resolves Git source references to concrete commits and exported content trees.
 //!
 //! Git operations stay behind the `GitResolver` trait so the external `git` command can later be replaced by a library implementation.
 //! See docs/design/adr/20260708T075713Z_implement-enozunu-in-rust.md for that decision.
 //!
 //! Branch resolution and exact-revision resolution are separate selectors on one request, not one call whose contract is "branch".
 //! Keeping them type-distinct prevents an immutable revision from being silently resolved as if it were a branch name.
+//!
+//! The resolver owns its Git cache and checkout layout; callers receive a Git-metadata-free exported content tree.
+//! Materialization therefore never reads a resolver cache directory.
+//! See docs/design/adr/20260711T144232Z_use-pinned-gist-root-as-skill-artifact-root.md for the export boundary decision.
 
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
@@ -45,11 +49,14 @@ pub struct GitResolutionRequest {
     pub selector: GitSelector,
 }
 
-/// A source repository checked out at a resolved commit.
+/// A source resolved to an exact commit and an exported content tree.
+///
+/// `content_root` holds the resolved commit's clean working-tree content without `.git` or any other Git repository metadata.
+/// It is the only filesystem surface callers may read; the resolver's cache and checkout layout stay private behind this boundary.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResolvedSource {
     pub commit: String,
-    pub checkout_dir: PathBuf,
+    pub content_root: PathBuf,
 }
 
 /// A resolution failure, kept transport-neutral so each caller classifies it in its own diagnostic vocabulary.
@@ -84,7 +91,7 @@ impl CommandGitResolver {
 
     // The cache key must include the selector: each (url, selector) pair keeps its own checkout, and a shared checkout would let the last resolved selector silently overwrite content another `ResolvedSource` still points at.
     // The selector kind is part of the key so a branch named like a SHA cannot collide with a revision of the same text.
-    fn cache_dir(&self, url: &str, selector_kind: &str, selector: &str) -> PathBuf {
+    fn cache_entry(&self, url: &str, selector_kind: &str, selector: &str) -> CacheEntry {
         // The readable prefix aids debugging; the hash disambiguates keys that sanitize to the same prefix.
         let mut hasher = DefaultHasher::new();
         url.hash(&mut hasher);
@@ -103,28 +110,36 @@ impl CommandGitResolver {
             .into_iter()
             .rev()
             .collect();
-        self.cache_root
-            .join(format!("{prefix}-{:016x}", hasher.finish()))
+        // The `v1` namespace keeps this layout apart from the pre-export layout, which used `cache_root/<key>` itself as the checkout; reusing that path would strand old checkouts and could collide with a repository that tracks a top-level `repo` entry.
+        let base = self
+            .cache_root
+            .join("v1")
+            .join(format!("{prefix}-{:016x}", hasher.finish()));
+        CacheEntry {
+            repo: base.join("repo"),
+            export: base.join("export"),
+        }
     }
 
     fn resolve_branch(&self, url: &str, branch: &str) -> Result<ResolvedSource, GitError> {
-        let dir = self.cache_dir(url, "branch", branch);
+        let entry = self.cache_entry(url, "branch", branch);
+        let dir = &entry.repo;
 
         if dir.join(".git").exists() {
             // `--` keeps a hostile branch value from being parsed as a git option; validation also rejects leading `-`, and this guards the subprocess boundary directly.
             run_git(
-                &dir,
+                dir,
                 &["fetch", "--quiet", "--depth", "1", "origin", "--", branch],
             )
             .map_err(|e| fetch_error(url, e))?;
-            run_git(&dir, &["checkout", "--quiet", "--detach", "FETCH_HEAD"])
+            run_git(dir, &["checkout", "--quiet", "--detach", "FETCH_HEAD"])
                 .map_err(|e| fetch_error(url, e))?;
-            // The cache must mirror the fetched commit exactly; leftover files would leak into materialized output.
-            run_git(&dir, &["reset", "--quiet", "--hard", "HEAD"])
+            // The cache must mirror the fetched commit exactly; leftover files would leak into the exported content tree.
+            run_git(dir, &["reset", "--quiet", "--hard", "HEAD"])
                 .map_err(|e| fetch_error(url, e))?;
-            run_git(&dir, &["clean", "--quiet", "-ffdx"]).map_err(|e| fetch_error(url, e))?;
+            run_git(dir, &["clean", "--quiet", "-ffdx"]).map_err(|e| fetch_error(url, e))?;
         } else {
-            self.create_cache_root()?;
+            create_parent_dirs(dir)?;
             let dir_str = dir.to_string_lossy().into_owned();
             run_git_anywhere(&[
                 "clone", "--quiet", "--depth", "1", "--branch", branch, "--", url, &dir_str,
@@ -132,14 +147,16 @@ impl CommandGitResolver {
             .map_err(|e| fetch_error(url, e))?;
         }
 
-        let commit = run_git(&dir, &["rev-parse", "HEAD"])
+        let commit = run_git(dir, &["rev-parse", "HEAD"])
             .map_err(|e| fetch_error(url, e))?
             .trim()
             .to_owned();
 
+        export_content_tree(dir, &entry.export)?;
+
         Ok(ResolvedSource {
             commit,
-            checkout_dir: dir,
+            content_root: entry.export,
         })
     }
 
@@ -148,10 +165,11 @@ impl CommandGitResolver {
         url: &str,
         revision: &CommitSha,
     ) -> Result<ResolvedSource, GitError> {
-        let dir = self.cache_dir(url, "revision", revision.as_str());
+        let entry = self.cache_entry(url, "revision", revision.as_str());
+        let dir = &entry.repo;
 
         if !dir.join(".git").exists() {
-            self.create_cache_root()?;
+            create_parent_dirs(dir)?;
             let dir_str = dir.to_string_lossy().into_owned();
             // A full clone (no `--depth`) so an older, non-HEAD revision is present in history; a shallow clone would only contain the branch tip.
             run_git_anywhere(&["clone", "--quiet", "--no-checkout", "--", url, &dir_str])
@@ -161,23 +179,20 @@ impl CommandGitResolver {
         // Verify the pinned revision exists before checkout so a missing revision is reported distinctly from a fetch failure.
         // The `^{commit}` peel also rejects an object id that exists but is not a commit.
         let commit_spec = format!("{}^{{commit}}", revision.as_str());
-        run_git(&dir, &["cat-file", "-e", &commit_spec]).map_err(|e| {
+        run_git(dir, &["cat-file", "-e", &commit_spec]).map_err(|e| {
             GitError::RevisionNotFound(format!(
                 "revision `{}` not found in `{url}`: {e}",
                 revision.as_str()
             ))
         })?;
 
-        run_git(
-            &dir,
-            &["checkout", "--quiet", "--detach", revision.as_str()],
-        )
-        .map_err(|e| fetch_error(url, e))?;
-        // The cache must mirror the pinned commit exactly; leftover files would leak into materialized output.
-        run_git(&dir, &["reset", "--quiet", "--hard", "HEAD"]).map_err(|e| fetch_error(url, e))?;
-        run_git(&dir, &["clean", "--quiet", "-ffdx"]).map_err(|e| fetch_error(url, e))?;
+        run_git(dir, &["checkout", "--quiet", "--detach", revision.as_str()])
+            .map_err(|e| fetch_error(url, e))?;
+        // The cache must mirror the pinned commit exactly; leftover files would leak into the exported content tree.
+        run_git(dir, &["reset", "--quiet", "--hard", "HEAD"]).map_err(|e| fetch_error(url, e))?;
+        run_git(dir, &["clean", "--quiet", "-ffdx"]).map_err(|e| fetch_error(url, e))?;
 
-        let head = run_git(&dir, &["rev-parse", "HEAD"])
+        let head = run_git(dir, &["rev-parse", "HEAD"])
             .map_err(|e| fetch_error(url, e))?
             .trim()
             .to_owned();
@@ -189,16 +204,78 @@ impl CommandGitResolver {
             )));
         }
 
+        export_content_tree(dir, &entry.export)?;
+
         Ok(ResolvedSource {
             commit: head,
-            checkout_dir: dir,
+            content_root: entry.export,
         })
     }
+}
 
-    fn create_cache_root(&self) -> Result<(), GitError> {
-        std::fs::create_dir_all(&self.cache_root)
-            .map_err(|e| GitError::Io(format!("failed to create cache directory: {e}")))
+/// One resolver cache slot: the Git checkout and the exported content tree derived from it.
+struct CacheEntry {
+    repo: PathBuf,
+    export: PathBuf,
+}
+
+fn create_parent_dirs(dir: &Path) -> Result<(), GitError> {
+    let parent = dir.parent().unwrap_or(dir);
+    std::fs::create_dir_all(parent)
+        .map_err(|e| GitError::Io(format!("failed to create cache directory: {e}")))
+}
+
+/// Exports the clean checkout at `repo` to `export` as a content tree without Git repository metadata.
+///
+/// The export mirrors the clean working tree exactly, minus `.git`: file types are preserved (symlinks stay symlinks) and permissions are copied with each file.
+/// No `git archive` semantics such as `export-ignore` or `export-subst` are applied.
+/// A previous export is removed first so stale files from an earlier resolution cannot leak into materialization.
+fn export_content_tree(repo: &Path, export: &Path) -> Result<(), GitError> {
+    if export.symlink_metadata().is_ok() {
+        std::fs::remove_dir_all(export)
+            .map_err(|e| GitError::Io(format!("failed to clear previous export: {e}")))?;
     }
+    std::fs::create_dir_all(export)
+        .map_err(|e| GitError::Io(format!("failed to create export directory: {e}")))?;
+    copy_tree(repo, export, true)
+}
+
+/// Recursively copies a directory tree, skipping the top-level `.git` when `at_root` is set.
+fn copy_tree(source: &Path, target: &Path, at_root: bool) -> Result<(), GitError> {
+    let io = |e: std::io::Error| GitError::Io(format!("failed to export content tree: {e}"));
+    for entry in std::fs::read_dir(source).map_err(io)? {
+        let entry = entry.map_err(io)?;
+        if at_root && entry.file_name() == ".git" {
+            continue;
+        }
+        let file_type = entry.file_type().map_err(io)?;
+        let target_child = target.join(entry.file_name());
+        if file_type.is_symlink() {
+            copy_symlink(&entry.path(), &target_child).map_err(io)?;
+        } else if file_type.is_dir() {
+            std::fs::create_dir(&target_child).map_err(io)?;
+            copy_tree(&entry.path(), &target_child, false)?;
+        } else {
+            // `fs::copy` carries permissions with the file, so the executable bit survives the export.
+            std::fs::copy(entry.path(), &target_child).map_err(io)?;
+        }
+    }
+    Ok(())
+}
+
+// Symlinks are reproduced as symlinks so downstream artifact validation sees the same file types as the working tree; resolving them here would silently weaken the symlink policy.
+#[cfg(unix)]
+fn copy_symlink(source: &Path, target: &Path) -> std::io::Result<()> {
+    let link = std::fs::read_link(source)?;
+    std::os::unix::fs::symlink(link, target)
+}
+
+#[cfg(not(unix))]
+fn copy_symlink(source: &Path, _target: &Path) -> std::io::Result<()> {
+    Err(std::io::Error::other(format!(
+        "cannot export symlink {} on this platform",
+        source.display()
+    )))
 }
 
 impl GitResolver for CommandGitResolver {

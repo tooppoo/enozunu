@@ -92,7 +92,9 @@ For a Gist source, the `source` object records:
 - `type` (`"gist"`)
 - `id`
 - `revision`
-- `file`
+- `file` (agent Gists only)
+
+A Skill Gist materializes the root of the pinned revision, so its `source` object records no `file` key.
 
 A Gist source is recorded as `type: "gist"`, never as `type: "git"`, even though Git transport materializes it. The recorded `revision` equals the pinned Gist revision.
 

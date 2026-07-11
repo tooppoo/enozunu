@@ -41,6 +41,13 @@ enozunu config-version=1 {
           path "common/skills/reportage"
         }
       }
+
+      // skill "japanese-note" {
+      //   gist {
+      //     id "fd287c3133457c4fd8f5601d34aa817d"
+      //     revision "209db7d6d19bc4727139844c0e8d786542e9ff68"
+      //   }
+      // }
     }
 
     // agents {

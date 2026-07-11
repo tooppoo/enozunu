@@ -1,0 +1,54 @@
+# E2E: `enozunu summon` materializes selected sources into their Codex-native paths.
+#
+# Uses `local` provider sources so the happy path stays deterministic and
+# offline: a git source would depend on an external repository and the network.
+# The same Skill artifact shape and a target-native agent file cover both Codex
+# materialization targets.
+
+case "summon materializes a local skill and agent source for codex" {
+  write <"sources/demo-skill/SKILL.md"> ```
+    ---
+    name: demo-skill
+    description: demo skill for the codex summon happy path
+    ---
+
+    # Demo Skill
+    ```
+  write <"sources/demo-agent.toml"> ```
+    name = "demo agent for the codex summon happy path"
+    ```
+  write <"enozunu.kdl"> ```
+    enozunu config-version=1 {
+      provider {
+        skills {
+          skill "demo-skill" {
+            local {
+              path "sources/demo-skill"
+            }
+          }
+        }
+        agents {
+          agent "demo-agent" {
+            local {
+              path "sources/demo-agent.toml"
+            }
+          }
+        }
+      }
+      consumer {
+        codex {
+          use-skills "demo-skill"
+          use-agents "demo-agent"
+        }
+      }
+    }
+    ```
+  $ enozunu summon
+  assert {
+    exit 0
+    stdout contains "for codex"
+    file <".agents/skills/demo-skill/SKILL.md"> contains "demo skill for the codex summon happy path"
+    file <".codex/agents/demo-agent.toml"> contains "demo agent for the codex summon happy path"
+    file <".enozunu/provenance.json"> contains "codex"
+  }
+}

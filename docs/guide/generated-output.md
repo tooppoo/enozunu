@@ -1,6 +1,6 @@
 # Generated Output
 
-Enozunu-managed target AI-native directories are generated output. For Claude this means `.claude/`. For Codex this means `.agents/` (Skills) and `.codex/` (custom agents).
+Enozunu-managed target AI-native directories are generated output. For which target AIs are supported and exactly where each artifact is written, see [the supported targets page](support.md).
 
 This guide is operational: what to commit, what regeneration does to your files, and how to inspect what was materialized. For why generated output is not treated as source of truth, see [the philosophy](../design/philosophy.md#generated-output-is-not-a-collaboration-surface). For the scope and policy behind it, see [the v0.0.x goal](../design/v0.0.x-goal.md).
 

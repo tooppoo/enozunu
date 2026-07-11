@@ -16,7 +16,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
 
-        uses: tooppoo/rellog-actions/setup@2abfca180ea8f95dc3d77be64b25b4bc33a0b380 # 0.1.0
+      - uses: tooppoo/rellog-actions/setup@2abfca180ea8f95dc3d77be64b25b4bc33a0b380 # 0.1.0
 
       - name: Check release is ready
         run: rellog ready ${{ github.ref_name }}

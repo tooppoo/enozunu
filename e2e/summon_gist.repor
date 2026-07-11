@@ -1,0 +1,99 @@
+# E2E: `enozunu summon` resolves a gist agent source over real git transport.
+#
+# A gist source is normally fetched from `https://gist.github.com/<id>.git`.
+# These cases exercise the real resolver — clone, exact-revision checkout, HEAD
+# verification — against a local git repository instead of a live Gist, by
+# redirecting that URL with a workspace-local `GIT_CONFIG_GLOBAL` insteadOf
+# rewrite. This keeps the test offline and deterministic while still driving the
+# actual git repository access that a fake transport cannot cover.
+
+case "summon materializes the pinned gist revision, not the branch tip" {
+  # A local repository standing in for the Gist: an older commit and a newer
+  # HEAD, so pinning the older revision proves exact-revision resolution rather
+  # than a default-HEAD checkout.
+  $ git init --quiet --initial-branch main gist-repo
+  $ git -C gist-repo config user.email "e2e@example.com"
+  $ git -C gist-repo config user.name "e2e"
+  $ printf '# shell reviewer OLD\n' > gist-repo/agent.md
+  $ git -C gist-repo add agent.md
+  $ git -C gist-repo commit --quiet -m old
+  $ printf '# shell reviewer NEW\n' > gist-repo/agent.md
+  $ git -C gist-repo commit --quiet -am new
+  # Redirect the gist remote to the local repository. The rewrite lives in a
+  # workspace-local git config so nothing outside the case workspace is touched.
+  $ printf '[url "file://%s/gist-repo"]\n\tinsteadOf = https://gist.github.com/2decf6c462d9b4418f2.git\n' "$PWD" > fake-gitconfig
+  write <"enozunu.kdl"> ```
+    enozunu config-version=1 {
+      provider {
+        agents {
+          agent "gist-reviewer" {
+            gist {
+              id "2decf6c462d9b4418f2"
+              revision "PINNED_REVISION"
+              file "agent.md"
+            }
+          }
+        }
+      }
+      consumer {
+        claude {
+          use-agents "gist-reviewer"
+        }
+      }
+    }
+    ```
+  # Pin the older commit, which is not the branch tip.
+  $ old=$(git -C gist-repo rev-parse HEAD~1) && sed -i "s/PINNED_REVISION/$old/" enozunu.kdl
+  $ GIT_CONFIG_GLOBAL="$PWD/fake-gitconfig" GIT_CONFIG_NOSYSTEM=1 enozunu summon
+  assert {
+    exit 0
+    stdout contains "gist: 2decf6c462d9b4418f2@"
+    # The materialized file is the older revision's content, proving the exact
+    # revision was checked out rather than the branch tip.
+    file <".claude/agents/gist-reviewer.md"> contains "shell reviewer OLD"
+    not {
+      file <".claude/agents/gist-reviewer.md"> contains "shell reviewer NEW"
+    }
+    file <".enozunu/provenance.json"> contains "\"type\": \"gist\""
+  }
+}
+
+case "summon reports a gist revision that does not exist" {
+  $ git init --quiet --initial-branch main gist-repo
+  $ git -C gist-repo config user.email "e2e@example.com"
+  $ git -C gist-repo config user.name "e2e"
+  $ printf '# shell reviewer\n' > gist-repo/agent.md
+  $ git -C gist-repo add agent.md
+  $ git -C gist-repo commit --quiet -m only
+  $ printf '[url "file://%s/gist-repo"]\n\tinsteadOf = https://gist.github.com/2decf6c462d9b4418f2.git\n' "$PWD" > fake-gitconfig
+  write <"enozunu.kdl"> ```
+    enozunu config-version=1 {
+      provider {
+        agents {
+          agent "gist-reviewer" {
+            gist {
+              id "2decf6c462d9b4418f2"
+              revision "0123456789abcdef0123456789abcdef01234567"
+              file "agent.md"
+            }
+          }
+        }
+      }
+      consumer {
+        claude {
+          use-agents "gist-reviewer"
+        }
+      }
+    }
+    ```
+  $ GIT_CONFIG_GLOBAL="$PWD/fake-gitconfig" GIT_CONFIG_NOSYSTEM=1 enozunu summon
+  assert {
+    exit 1
+    # Classification is by diagnostic code, not message text: a fetch that
+    # reached the repository but not the pinned revision is gist-revision-not-found.
+    stderr contains "gist-revision-not-found"
+    not {
+      dir <".claude"> exists
+    }
+  }
+}

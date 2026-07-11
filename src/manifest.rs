@@ -86,15 +86,55 @@ pub enum SourceReference {
     },
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Consumer {
-    pub claude: ClaudeConsumer,
+/// A target AI that Enozunu materializes configuration for.
+///
+/// Target AI is a closed domain type rather than a manifest string carried downstream, so native paths, the provenance `target_ai`, and CLI rendering all derive from the same validated value.
+/// The set is closed at parse time: an unrecognized `consumer` block is a diagnostic, never a new `TargetAi`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TargetAi {
+    Claude,
+    Codex,
 }
 
+impl TargetAi {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            TargetAi::Claude => "claude",
+            TargetAi::Codex => "codex",
+        }
+    }
+}
+
+/// The sources one target AI selects from the shared provider pool.
+///
+/// The type is target-independent: Claude and Codex select from the same `provider.skills` and `provider.agents`, and the target only changes where each selection materializes.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ClaudeConsumer {
+pub struct TargetConsumer {
     pub use_skills: Vec<String>,
     pub use_agents: Vec<String>,
+}
+
+/// The `consumer` block: which target AIs to materialize for.
+///
+/// A target is `None` when its block is absent, so a Claude-only manifest and a Codex-only manifest are both valid without a placeholder selection.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Consumer {
+    pub claude: Option<TargetConsumer>,
+    pub codex: Option<TargetConsumer>,
+}
+
+impl Consumer {
+    /// Iterates the declared targets, pairing each with its `TargetAi`, in a fixed order.
+    ///
+    /// Planning and reference validation walk every target through this one accessor, so neither has to special-case which targets exist.
+    pub fn targets(&self) -> impl Iterator<Item = (TargetAi, &TargetConsumer)> {
+        [
+            (TargetAi::Claude, self.claude.as_ref()),
+            (TargetAi::Codex, self.codex.as_ref()),
+        ]
+        .into_iter()
+        .filter_map(|(ai, consumer)| consumer.map(|c| (ai, c)))
+    }
 }
 
 /// Parses and validates manifest text.
@@ -149,10 +189,8 @@ pub fn parse(text: &str) -> Result<Manifest, Vec<Diagnostic>> {
                 "manifest must declare a `consumer` block",
             ));
             Consumer {
-                claude: ClaudeConsumer {
-                    use_skills: Vec::new(),
-                    use_agents: Vec::new(),
-                },
+                claude: None,
+                codex: None,
             }
         }
     };
@@ -638,32 +676,31 @@ fn parse_gist_reference(
 
 fn parse_consumer(node: &KdlNode, diags: &mut Vec<Diagnostic>) -> Consumer {
     let mut claude = None;
+    let mut codex = None;
 
     if let Some(children) = node.children() {
         for child in children.nodes() {
             match child.name().value() {
-                "claude" => claude = Some(parse_claude_consumer(child, diags)),
-                "codex" => diags.push(Diagnostic::new(
-                    DiagnosticCode::UnsupportedConsumer,
-                    "`consumer.codex` is not supported in v0.0.x; the only supported target AI is Claude",
-                )),
+                "claude" => claude = Some(parse_target_consumer(child, "claude", diags)),
+                "codex" => codex = Some(parse_target_consumer(child, "codex", diags)),
                 other => diags.push(Diagnostic::new(
                     DiagnosticCode::UnsupportedConsumer,
-                    format!("`consumer.{other}` is not supported in v0.0.x; the only supported target AI is Claude"),
+                    format!(
+                        "`consumer.{other}` is not a supported target AI; supported target AIs are `claude` and `codex`"
+                    ),
                 )),
             }
         }
     }
 
-    Consumer {
-        claude: claude.unwrap_or(ClaudeConsumer {
-            use_skills: Vec::new(),
-            use_agents: Vec::new(),
-        }),
-    }
+    Consumer { claude, codex }
 }
 
-fn parse_claude_consumer(node: &KdlNode, diags: &mut Vec<Diagnostic>) -> ClaudeConsumer {
+fn parse_target_consumer(
+    node: &KdlNode,
+    target: &str,
+    diags: &mut Vec<Diagnostic>,
+) -> TargetConsumer {
     let mut use_skills = Vec::new();
     let mut use_agents = Vec::new();
 
@@ -674,33 +711,41 @@ fn parse_claude_consumer(node: &KdlNode, diags: &mut Vec<Diagnostic>) -> ClaudeC
                 "use-agents" => use_agents = string_args(child, "use-agents", diags),
                 other => diags.push(Diagnostic::new(
                     DiagnosticCode::ManifestShape,
-                    format!("unknown node `{other}` under `consumer.claude`"),
+                    format!("unknown node `{other}` under `consumer.{target}`"),
                 )),
             }
         }
     }
 
-    ClaudeConsumer {
+    TargetConsumer {
         use_skills,
         use_agents,
     }
 }
 
 fn validate_references(manifest: &Manifest, diags: &mut Vec<Diagnostic>) {
-    for name in &manifest.consumer.claude.use_skills {
-        if !manifest.provider.skills.iter().any(|s| &s.name == name) {
-            diags.push(Diagnostic::new(
-                DiagnosticCode::UnknownSourceReference,
-                format!("`use-skills` references `{name}`, which is not declared under `provider.skills`"),
-            ));
+    // Every target selects from the same provider pool, so each target's references are checked against the same `provider.skills` / `provider.agents`.
+    for (ai, consumer) in manifest.consumer.targets() {
+        let target = ai.as_str();
+        for name in &consumer.use_skills {
+            if !manifest.provider.skills.iter().any(|s| &s.name == name) {
+                diags.push(Diagnostic::new(
+                    DiagnosticCode::UnknownSourceReference,
+                    format!(
+                        "`consumer.{target}` `use-skills` references `{name}`, which is not declared under `provider.skills`"
+                    ),
+                ));
+            }
         }
-    }
-    for name in &manifest.consumer.claude.use_agents {
-        if !manifest.provider.agents.iter().any(|s| &s.name == name) {
-            diags.push(Diagnostic::new(
-                DiagnosticCode::UnknownSourceReference,
-                format!("`use-agents` references `{name}`, which is not declared under `provider.agents`"),
-            ));
+        for name in &consumer.use_agents {
+            if !manifest.provider.agents.iter().any(|s| &s.name == name) {
+                diags.push(Diagnostic::new(
+                    DiagnosticCode::UnknownSourceReference,
+                    format!(
+                        "`consumer.{target}` `use-agents` references `{name}`, which is not declared under `provider.agents`"
+                    ),
+                ));
+            }
         }
     }
 }
@@ -858,7 +903,7 @@ enozunu config-version=1 {
         assert_eq!(manifest.provider.skills.len(), 2);
         assert_eq!(manifest.provider.agents.len(), 1);
         assert_eq!(
-            manifest.consumer.claude.use_skills,
+            manifest.consumer.claude.as_ref().unwrap().use_skills,
             ["git-kura", "local-git-kura"]
         );
         assert_eq!(
@@ -899,11 +944,96 @@ enozunu config-version=1 {
     }
 
     #[test]
-    fn rejects_consumer_codex() {
+    fn accepts_a_codex_only_manifest() {
+        let text = r#"
+enozunu config-version=1 {
+  provider {
+    skills {
+      skill "git-kura" { git { url "https://example.com/r"; branch "main"; path "s/git-kura" } }
+    }
+    agents {
+      agent "reviewer-codex" { git { url "https://example.com/r"; branch "main"; path "a/reviewer.toml" } }
+    }
+  }
+  consumer {
+    codex {
+      use-skills "git-kura"
+      use-agents "reviewer-codex"
+    }
+  }
+}
+"#;
+        let manifest = parse(text).unwrap();
+        assert!(manifest.consumer.claude.is_none());
+        let codex = manifest.consumer.codex.as_ref().unwrap();
+        assert_eq!(codex.use_skills, ["git-kura"]);
+        assert_eq!(codex.use_agents, ["reviewer-codex"]);
+    }
+
+    #[test]
+    fn accepts_a_manifest_selecting_one_skill_from_both_targets() {
+        let text = r#"
+enozunu config-version=1 {
+  provider {
+    skills {
+      skill "git-kura" { git { url "https://example.com/r"; branch "main"; path "s/git-kura" } }
+    }
+  }
+  consumer {
+    claude {
+      use-skills "git-kura"
+    }
+    codex {
+      use-skills "git-kura"
+    }
+  }
+}
+"#;
+        let manifest = parse(text).unwrap();
+        assert_eq!(
+            manifest.consumer.claude.as_ref().unwrap().use_skills,
+            ["git-kura"]
+        );
+        assert_eq!(
+            manifest.consumer.codex.as_ref().unwrap().use_skills,
+            ["git-kura"]
+        );
+    }
+
+    #[test]
+    fn rejects_an_unknown_node_under_consumer_codex() {
         let text = r#"
 enozunu config-version=1 {
   consumer {
-    codex {}
+    codex {
+      use-plugins "x"
+    }
+  }
+}
+"#;
+        assert!(codes(parse(text)).contains(&DiagnosticCode::ManifestShape));
+    }
+
+    #[test]
+    fn rejects_an_undeclared_codex_reference() {
+        let text = r#"
+enozunu config-version=1 {
+  consumer {
+    codex {
+      use-skills "missing"
+    }
+  }
+}
+"#;
+        assert!(codes(parse(text)).contains(&DiagnosticCode::UnknownSourceReference));
+    }
+
+    #[test]
+    fn rejects_an_unknown_consumer_target() {
+        let text = r#"
+enozunu config-version=1 {
+  consumer {
+    gemini {}
   }
 }
 "#;

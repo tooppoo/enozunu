@@ -33,7 +33,7 @@ pub enum DiagnosticCode {
     ManifestShape,
     /// The manifest declares a `config-version` this build does not support.
     UnsupportedConfigVersion,
-    /// The manifest selects a consumer target that v0.0.x does not support, such as `consumer.codex`.
+    /// The manifest selects a `consumer` target that is not a supported target AI; the supported targets are `claude` and `codex`.
     UnsupportedConsumer,
     /// The source reference uses a form outside the supported `git` / `local` / `gist` blocks, such as an unknown block kind, a GitHub tree/blob URL shorthand, an absolute local path, or a `file` field in a Skill Gist.
     UnsupportedSourceReference,

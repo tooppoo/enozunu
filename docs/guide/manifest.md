@@ -11,7 +11,7 @@ and target materialization choices under `consumer`.
 
 `consumer` means the target materialization side inside the Enozunu manifest.
 
-`target AI` means an AI agent tooling system that reads generated configuration. For v0.0.x, the only target AI is Claude.
+`target AI` means an AI agent tooling system that reads generated configuration. The supported target AIs are Claude and Codex.
 
 `target AI-native` means the target AI's native format, path, or configuration layout.
 
@@ -85,7 +85,9 @@ agent "shell-script-reviewer" {
 }
 ```
 
-An agent source must resolve to a file. For v0.0.x, that file is materialized into `.claude/agents/<name>.md`.
+An agent source must resolve to a file. It is materialized into the native agent path of each target AI that selects it: `.claude/agents/<name>.md` for Claude and `.codex/agents/<name>.toml` for Codex.
+
+Enozunu does not convert between agent formats. A Claude agent is a Markdown file and a Codex custom agent is a TOML file, so the provider declares a target-native source for each. See the [Consumer Block](#consumer-block) section for how each target selects its agent, and [the Claude and Codex materialization ADR](../design/adr/20260711T184657Z_materialize-claude-and-codex-without-semantic-conversion.md) for the responsibility boundary.
 
 ## Source Reference Blocks
 
@@ -204,7 +206,7 @@ Semantics:
 - `id` is the unique Gist identifier from the final path segment of a Gist URL, such as `2decf6c462d9b4418f2` in `https://gist.github.com/monalisa/2decf6c462d9b4418f2`.
 - The manifest does not require the Gist owner: the resolver builds the Git remote `https://gist.github.com/<id>.git` from the id alone.
 - `revision` pins the exact Gist commit to materialize.
-- For a Skill, the root of the pinned Gist revision is the Skill artifact root. It must contain a regular-file `SKILL.md`, and the whole tree is materialized to `.claude/skills/<name>/`.
+- For a Skill, the root of the pinned Gist revision is the Skill artifact root. It must contain a regular-file `SKILL.md`, and the whole tree is materialized to the selecting target AI's native Skill path.
 - For an agent, `file` is the agent artifact path relative to the root of the checked-out Gist revision.
 - A `file` field inside a Skill Gist is rejected, and no `path` field exists to select a nested Skill root.
 
@@ -230,7 +232,7 @@ A latest, branch, tag, abbreviated, uppercase, whitespace-padded, or SHA-256 rev
 - it must not contain empty or `..` segments
 - it must resolve to a regular file inside the resolved Gist content
 
-An agent Gist source is materialized to `.claude/agents/<name>.md`, the same target as an agent Git source.
+An agent Gist source is materialized to the same target-native agent path as an agent Git source, determined by the selecting target AI.
 
 Skill Gist trees follow the same validation policy as other Skill sources, including the symlink rejection policy.
 
@@ -240,63 +242,86 @@ Gist resolution uses Git transport internally, but a Gist remains a distinct sou
 
 The `consumer` block declares what to materialize for each target AI.
 
-For v0.0.x, only `consumer.claude` is supported.
+The supported target blocks are `consumer.claude` and `consumer.codex`. A manifest may declare either, both, or neither.
 
 ```kdl
 consumer {
   claude {
     use-skills "git-kura"
-    use-agents "shell-script-reviewer"
+    use-agents "shell-script-reviewer-claude"
+  }
+
+  codex {
+    use-skills "git-kura"
+    use-agents "shell-script-reviewer-codex"
   }
 }
 ```
 
-### Claude Skills
+### Shared Provider Pool
 
-`consumer.claude.use-skills` selects Skill sources by name.
+Claude and Codex select from the same `provider.skills` and `provider.agents` declarations. A source declaration is not bound to a target AI.
+
+The same Skill source can be selected from both targets. Enozunu resolves it once per run and materializes it into each selecting target's native path.
+
+Agent sources are target-native. A Claude agent is a Markdown file and a Codex custom agent is a TOML file, so the provider declares a separate source for each and each target selects the one written for it. Enozunu materializes the file verbatim; it does not convert a Claude agent into a Codex agent or the reverse.
+
+### Skills
+
+`use-skills` selects Skill sources by name. Each referenced name must exist under `provider.skills`.
 
 ```kdl
 consumer {
   claude {
     use-skills "git-kura" "semantic-line-breaks"
   }
-}
-```
-
-Each referenced name must exist under `provider.skills`.
-
-Each selected Skill is materialized to:
-
-```text
-.claude/skills/<name>/
-```
-
-### Claude Agents
-
-`consumer.claude.use-agents` selects agent sources by name.
-
-```kdl
-consumer {
-  claude {
-    use-agents "shell-script-reviewer"
+  codex {
+    use-skills "git-kura"
   }
 }
 ```
 
-Each referenced name must exist under `provider.agents`.
-
-Each selected agent source is materialized to:
+Each selected Skill is materialized to the selecting target AI's native Skill path:
 
 ```text
-.claude/agents/<name>.md
+claude -> .claude/skills/<name>/
+codex  -> .agents/skills/<name>/
 ```
 
-## Unsupported in v0.0.x
+### Agents
+
+`use-agents` selects agent sources by name. Each referenced name must exist under `provider.agents`.
+
+```kdl
+consumer {
+  claude {
+    use-agents "shell-script-reviewer-claude"
+  }
+  codex {
+    use-agents "shell-script-reviewer-codex"
+  }
+}
+```
+
+Each selected agent source is materialized to the selecting target AI's native agent path:
+
+```text
+claude -> .claude/agents/<name>.md
+codex  -> .codex/agents/<name>.toml
+```
+
+The target filename suffix is fixed by the target AI. The source path itself is not required to carry a matching extension.
+
+Enozunu does not guarantee that a source selected for a target AI is interpreted as intended by that target AI. It projects the source into the target's native path without validating the target-native format. The rationale is recorded in [the Claude and Codex materialization ADR](../design/adr/20260711T184657Z_materialize-claude-and-codex-without-semantic-conversion.md).
+
+Codex `AGENTS.md` is repository instructions rather than a custom agent definition, so it is not part of agent materialization.
+
+## Unsupported
 
 The following are not supported in v0.0.x:
 
 ```text
-consumer.codex
+consumer targets other than claude and codex
 GitHub tree/blob URL shorthand
 Git revision selector
 Git tag selector
@@ -306,6 +331,8 @@ absolute local paths
 Gist branch, tag, or abbreviated revision selectors
 nested Skill root selection inside a Gist
 ```
+
+Codex support is limited to Skill and custom agent materialization. `AGENTS.md`, `.codex/config.toml`, and Codex rules, MCP, hooks, and plugins are out of scope.
 
 An exact revision is supported only for Gist sources, through the dedicated `gist` block, not for Git source references.
 
@@ -327,7 +354,7 @@ v0.0.x should reject:
 - Skill sources that do not contain `SKILL.md`
 - source paths that cannot be resolved
 - GitHub tree/blob URL shorthand
-- `consumer.codex`
+- `consumer` targets other than `claude` and `codex`
 - path traversal or symlink writes outside the target root
 - absolute `local` paths
 - symlinked `local` source paths
@@ -379,6 +406,14 @@ enozunu config-version=1 {
         }
       }
 
+      agent "shell-script-reviewer-codex" {
+        git {
+          url "https://github.com/tooppoo/installerer"
+          branch "main"
+          path ".codex/agents/shell-script-reviewer.toml"
+        }
+      }
+
       agent "gist-reviewer" {
         gist {
           id "2decf6c462d9b4418f2"
@@ -393,6 +428,11 @@ enozunu config-version=1 {
     claude {
       use-skills "git-kura" "local-git-kura" "semantic-line-breaks"
       use-agents "shell-script-reviewer" "gist-reviewer"
+    }
+
+    codex {
+      use-skills "git-kura" "semantic-line-breaks"
+      use-agents "shell-script-reviewer-codex"
     }
   }
 }

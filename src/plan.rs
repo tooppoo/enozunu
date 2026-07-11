@@ -3,7 +3,7 @@
 //! Planning decides what would be written where; it does not resolve sources or touch the filesystem.
 
 use crate::diagnostics::{Diagnostic, DiagnosticCode};
-use crate::manifest::{Manifest, SourceReference};
+use crate::manifest::{Manifest, SourceReference, TargetAi, TargetConsumer};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ArtifactKind {
@@ -20,50 +20,37 @@ impl ArtifactKind {
     }
 }
 
-/// One selected source and the project-relative Claude target path it materializes to.
+/// One selected source and the project-relative target-AI-native path it materializes to.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PlannedMaterialization {
     pub source_name: String,
     pub kind: ArtifactKind,
     pub reference: SourceReference,
+    pub target_ai: TargetAi,
     pub target_rel_path: String,
 }
 
-/// Plans materializations for every source selected by `consumer.claude`.
+/// The project-relative native path a target AI reads an artifact of `kind` named `name` from.
 ///
-/// Fails when two materializations resolve to the same target path, because later writes would silently overwrite earlier ones.
+/// Enozunu projects one source into each target's native layout without converting its format: Claude reads a Markdown agent under `.claude/agents/`, Codex reads a TOML agent under `.codex/agents/`, and both read a Skill directory (differing only in location).
+/// The `.md` / `.toml` suffix here fixes the target filename; it is not required of, or matched against, the source path.
+fn target_rel_path(target: TargetAi, kind: ArtifactKind, name: &str) -> String {
+    match (target, kind) {
+        (TargetAi::Claude, ArtifactKind::Skill) => format!(".claude/skills/{name}"),
+        (TargetAi::Claude, ArtifactKind::Agent) => format!(".claude/agents/{name}.md"),
+        (TargetAi::Codex, ArtifactKind::Skill) => format!(".agents/skills/{name}"),
+        (TargetAi::Codex, ArtifactKind::Agent) => format!(".codex/agents/{name}.toml"),
+    }
+}
+
+/// Plans materializations for every source selected by every declared consumer target.
+///
+/// Fails when two materializations resolve to the same target path, because later writes would silently overwrite earlier ones. The same source selected by both Claude and Codex resolves to distinct native paths, so it is not a collision.
 pub fn plan(manifest: &Manifest) -> Result<Vec<PlannedMaterialization>, Vec<Diagnostic>> {
     let mut planned = Vec::new();
 
-    for name in &manifest.consumer.claude.use_skills {
-        // Reference existence is validated at parse time, so a missing lookup here is a programming error.
-        let decl = manifest
-            .provider
-            .skills
-            .iter()
-            .find(|s| &s.name == name)
-            .expect("validated manifest references a declared skill");
-        planned.push(PlannedMaterialization {
-            source_name: decl.name.clone(),
-            kind: ArtifactKind::Skill,
-            reference: decl.reference.clone(),
-            target_rel_path: format!(".claude/skills/{}", decl.name),
-        });
-    }
-
-    for name in &manifest.consumer.claude.use_agents {
-        let decl = manifest
-            .provider
-            .agents
-            .iter()
-            .find(|s| &s.name == name)
-            .expect("validated manifest references a declared agent");
-        planned.push(PlannedMaterialization {
-            source_name: decl.name.clone(),
-            kind: ArtifactKind::Agent,
-            reference: decl.reference.clone(),
-            target_rel_path: format!(".claude/agents/{}.md", decl.name),
-        });
+    for (target, consumer) in manifest.consumer.targets() {
+        plan_target(manifest, target, consumer, &mut planned);
     }
 
     let mut diags = Vec::new();
@@ -84,6 +71,47 @@ pub fn plan(manifest: &Manifest) -> Result<Vec<PlannedMaterialization>, Vec<Diag
         Ok(planned)
     } else {
         Err(diags)
+    }
+}
+
+/// Appends the Skill and agent materializations one target selects, in selection order.
+fn plan_target(
+    manifest: &Manifest,
+    target: TargetAi,
+    consumer: &TargetConsumer,
+    planned: &mut Vec<PlannedMaterialization>,
+) {
+    for name in &consumer.use_skills {
+        // Reference existence is validated at parse time, so a missing lookup here is a programming error.
+        let decl = manifest
+            .provider
+            .skills
+            .iter()
+            .find(|s| &s.name == name)
+            .expect("validated manifest references a declared skill");
+        planned.push(PlannedMaterialization {
+            source_name: decl.name.clone(),
+            kind: ArtifactKind::Skill,
+            reference: decl.reference.clone(),
+            target_ai: target,
+            target_rel_path: target_rel_path(target, ArtifactKind::Skill, &decl.name),
+        });
+    }
+
+    for name in &consumer.use_agents {
+        let decl = manifest
+            .provider
+            .agents
+            .iter()
+            .find(|s| &s.name == name)
+            .expect("validated manifest references a declared agent");
+        planned.push(PlannedMaterialization {
+            source_name: decl.name.clone(),
+            kind: ArtifactKind::Agent,
+            reference: decl.reference.clone(),
+            target_ai: target,
+            target_rel_path: target_rel_path(target, ArtifactKind::Agent, &decl.name),
+        });
     }
 }
 
@@ -138,6 +166,82 @@ enozunu config-version=1 {
   }
   consumer {
     claude {
+      use-skills "a" "a"
+    }
+  }
+}
+"#;
+        let diags = plan(&manifest::parse(text).unwrap()).unwrap_err();
+        assert!(
+            diags
+                .iter()
+                .any(|d| d.code == DiagnosticCode::DuplicateTargetPath)
+        );
+    }
+
+    #[test]
+    fn plans_codex_skill_and_agent_into_codex_native_paths() {
+        let text = r#"
+enozunu config-version=1 {
+  provider {
+    skills {
+      skill "demo" { git { url "https://example.com/r"; branch "main"; path "s/demo" } }
+    }
+    agents {
+      agent "reviewer" { git { url "https://example.com/r"; branch "main"; path "a/reviewer.toml" } }
+    }
+  }
+  consumer {
+    codex {
+      use-skills "demo"
+      use-agents "reviewer"
+    }
+  }
+}
+"#;
+        let planned = plan(&manifest::parse(text).unwrap()).unwrap();
+        assert_eq!(planned.len(), 2);
+        assert_eq!(planned[0].target_ai, TargetAi::Codex);
+        assert_eq!(planned[0].target_rel_path, ".agents/skills/demo");
+        assert_eq!(planned[1].target_ai, TargetAi::Codex);
+        assert_eq!(planned[1].target_rel_path, ".codex/agents/reviewer.toml");
+    }
+
+    #[test]
+    fn plans_the_same_skill_for_both_targets_without_a_collision() {
+        let text = r#"
+enozunu config-version=1 {
+  provider {
+    skills {
+      skill "demo" { git { url "https://example.com/r"; branch "main"; path "s/demo" } }
+    }
+  }
+  consumer {
+    claude { use-skills "demo" }
+    codex { use-skills "demo" }
+  }
+}
+"#;
+        let planned = plan(&manifest::parse(text).unwrap()).unwrap();
+        assert_eq!(planned.len(), 2);
+        assert_eq!(planned[0].target_ai, TargetAi::Claude);
+        assert_eq!(planned[0].target_rel_path, ".claude/skills/demo");
+        assert_eq!(planned[1].target_ai, TargetAi::Codex);
+        assert_eq!(planned[1].target_rel_path, ".agents/skills/demo");
+    }
+
+    #[test]
+    fn rejects_duplicate_target_paths_within_one_target() {
+        // The same source selected twice by one target collides on its single native path.
+        let text = r#"
+enozunu config-version=1 {
+  provider {
+    skills {
+      skill "a" { git { url "https://example.com/r"; branch "main"; path "s/a" } }
+    }
+  }
+  consumer {
+    codex {
       use-skills "a" "a"
     }
   }

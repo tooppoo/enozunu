@@ -40,26 +40,48 @@ enozunu config-version=1 {
     }
 
     // Agent sources. Each agent must resolve to a single file.
+    // Enozunu materializes an agent source verbatim; it does not convert a Claude
+    // Markdown agent into a Codex TOML agent, or the reverse. Declare a
+    // target-native source for each target AI you select the agent from.
     agents {
-      agent "example-agent" {
+      agent "example-agent-claude" {
         git {
           url "https://github.com/your-org/your-agents-repo"
           branch "main"
-          // Repository-relative path to the agent file.
+          // Repository-relative path to the Claude Markdown agent file.
           path "path/to/agents/example-agent.md"
+        }
+      }
+
+      agent "example-agent-codex" {
+        git {
+          url "https://github.com/your-org/your-agents-repo"
+          branch "main"
+          // Repository-relative path to the Codex TOML agent file.
+          path "path/to/agents/example-agent.toml"
         }
       }
     }
   }
 
   // `consumer` selects what to materialize for each target AI.
-  // v0.0.x supports Claude only.
+  // Claude and Codex select from the same `provider` pool. A Skill source can be
+  // selected from both; an agent source is target-native, so each target selects
+  // the agent written for it. Enozunu projects each selection into the target's
+  // native path without converting the artifact's format.
   consumer {
     claude {
       // Selected skills are materialized to .claude/skills/<name>/.
       use-skills "example-skill" "another-skill"
       // Selected agents are materialized to .claude/agents/<name>.md.
-      use-agents "example-agent"
+      use-agents "example-agent-claude"
+    }
+
+    codex {
+      // The same Skill sources are materialized to .agents/skills/<name>/.
+      use-skills "example-skill" "another-skill"
+      // Selected agents are materialized to .codex/agents/<name>.toml.
+      use-agents "example-agent-codex"
     }
   }
 }
@@ -156,8 +178,22 @@ mod tests {
         let manifest = crate::manifest::parse(TEMPLATE).unwrap();
         assert!(!manifest.provider.skills.is_empty());
         assert!(!manifest.provider.agents.is_empty());
-        assert!(!manifest.consumer.claude.use_skills.is_empty());
-        assert!(!manifest.consumer.claude.use_agents.is_empty());
+
+        let claude = manifest.consumer.claude.as_ref().unwrap();
+        assert!(!claude.use_skills.is_empty());
+        assert!(!claude.use_agents.is_empty());
+
+        // The template exercises both target AIs, including a Skill source shared across them.
+        let codex = manifest.consumer.codex.as_ref().unwrap();
+        assert!(!codex.use_skills.is_empty());
+        assert!(!codex.use_agents.is_empty());
+        assert!(
+            claude
+                .use_skills
+                .iter()
+                .any(|s| codex.use_skills.contains(s)),
+            "template should show one Skill source selected from both targets"
+        );
     }
 
     #[test]

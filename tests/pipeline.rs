@@ -146,6 +146,236 @@ fn materialize(project: &TestProject) -> Result<(), Vec<enozunu::diagnostics::Di
         .map(|_| ())
 }
 
+/// Adds a Codex-native TOML agent file to the source repository and commits it.
+///
+/// Enozunu does not convert between agent formats, so a Codex agent source is a target-native file the provider supplies; this gives the Codex tests one to select.
+fn add_codex_agent(project: &TestProject) {
+    fs::write(
+        project.source_repo.join("agents/demo-agent.toml"),
+        "name = \"demo agent\"\n",
+    )
+    .unwrap();
+    commit_all(&project.source_repo, "add codex agent");
+}
+
+#[test]
+fn materializes_codex_skill_and_agent_into_codex_native_paths() {
+    let project = setup();
+    add_codex_agent(&project);
+    let url = format!("file://{}", project.source_repo.display());
+    let manifest = format!(
+        r#"
+enozunu config-version=1 {{
+  provider {{
+    skills {{
+      skill "demo-skill" {{
+        git {{
+          url "{url}"
+          branch "main"
+          path "skills/demo-skill"
+        }}
+      }}
+    }}
+    agents {{
+      agent "demo-agent" {{
+        git {{
+          url "{url}"
+          branch "main"
+          path "agents/demo-agent.toml"
+        }}
+      }}
+    }}
+  }}
+  consumer {{
+    codex {{
+      use-skills "demo-skill"
+      use-agents "demo-agent"
+    }}
+  }}
+}}
+"#
+    );
+    fs::write(project.root.join("enozunu.kdl"), manifest).unwrap();
+
+    materialize(&project).unwrap();
+
+    // The Skill tree lands under Codex's native Skill path, and the agent under its native agent path.
+    assert!(
+        project
+            .root
+            .join(".agents/skills/demo-skill/SKILL.md")
+            .is_file()
+    );
+    assert!(
+        project
+            .root
+            .join(".agents/skills/demo-skill/helper.txt")
+            .is_file()
+    );
+    assert_eq!(
+        fs::read_to_string(project.root.join(".codex/agents/demo-agent.toml")).unwrap(),
+        "name = \"demo agent\"\n"
+    );
+    // No Claude output is produced for a Codex-only manifest.
+    assert!(!project.root.join(".claude").exists());
+}
+
+#[test]
+fn materializes_the_same_skill_for_claude_and_codex_in_one_run() {
+    let project = setup();
+    let url = format!("file://{}", project.source_repo.display());
+    let manifest = format!(
+        r#"
+enozunu config-version=1 {{
+  provider {{
+    skills {{
+      skill "demo-skill" {{
+        git {{
+          url "{url}"
+          branch "main"
+          path "skills/demo-skill"
+        }}
+      }}
+    }}
+  }}
+  consumer {{
+    claude {{
+      use-skills "demo-skill"
+    }}
+    codex {{
+      use-skills "demo-skill"
+    }}
+  }}
+}}
+"#
+    );
+    fs::write(project.root.join("enozunu.kdl"), manifest).unwrap();
+
+    materialize(&project).unwrap();
+
+    assert!(
+        project
+            .root
+            .join(".claude/skills/demo-skill/SKILL.md")
+            .is_file()
+    );
+    assert!(
+        project
+            .root
+            .join(".agents/skills/demo-skill/SKILL.md")
+            .is_file()
+    );
+
+    // One source placed in two targets records one provenance entry per target, sharing source identity.
+    let text = fs::read_to_string(project.root.join(".enozunu/provenance.json")).unwrap();
+    let record: serde_json::Value = serde_json::from_str(&text).unwrap();
+    let entries = record["entries"].as_array().unwrap();
+    assert_eq!(record["version"], 1);
+    assert_eq!(entries.len(), 2);
+    assert_eq!(entries[0]["target_ai"], "claude");
+    assert_eq!(entries[0]["target_path"], ".claude/skills/demo-skill");
+    assert_eq!(entries[1]["target_ai"], "codex");
+    assert_eq!(entries[1]["target_path"], ".agents/skills/demo-skill");
+    // The source object is identical across targets: same kind, same Git identity.
+    assert_eq!(entries[0]["kind"], "skill");
+    assert_eq!(entries[1]["kind"], "skill");
+    assert_eq!(entries[0]["source"], entries[1]["source"]);
+    assert_eq!(entries[0]["source"]["type"], "git");
+}
+
+#[test]
+fn resolves_a_shared_git_source_once_across_targets() {
+    // A resolver that records every request, so a source selected by both targets is proven to resolve once.
+    struct CountingResolver {
+        inner: CommandGitResolver,
+        requests: std::cell::RefCell<Vec<GitResolutionRequest>>,
+    }
+    impl GitResolver for CountingResolver {
+        fn resolve(
+            &self,
+            request: &GitResolutionRequest,
+        ) -> Result<enozunu::git::ResolvedSource, enozunu::git::GitError> {
+            self.requests.borrow_mut().push(request.clone());
+            self.inner.resolve(request)
+        }
+    }
+
+    let project = setup();
+    let url = format!("file://{}", project.source_repo.display());
+    let manifest = format!(
+        r#"
+enozunu config-version=1 {{
+  provider {{
+    skills {{
+      skill "demo-skill" {{
+        git {{
+          url "{url}"
+          branch "main"
+          path "skills/demo-skill"
+        }}
+      }}
+    }}
+  }}
+  consumer {{
+    claude {{ use-skills "demo-skill" }}
+    codex {{ use-skills "demo-skill" }}
+  }}
+}}
+"#
+    );
+    fs::write(project.root.join("enozunu.kdl"), manifest).unwrap();
+
+    let resolver = CountingResolver {
+        inner: CommandGitResolver::new(project.root.join(".enozunu/cache")),
+        requests: std::cell::RefCell::new(Vec::new()),
+    };
+    enozunu::run_materialize(&project.root.join("enozunu.kdl"), &project.root, &resolver).unwrap();
+
+    // The same (url, branch) selected by two targets is resolved exactly once.
+    assert_eq!(resolver.requests.borrow().len(), 1);
+}
+
+#[test]
+fn rejects_an_invalid_artifact_before_writing_any_target() {
+    // The skill lacks SKILL.md, so validation must fail before either target is written.
+    let project = setup();
+    fs::remove_file(project.source_repo.join("skills/demo-skill/SKILL.md")).unwrap();
+    commit_all(&project.source_repo, "drop SKILL.md");
+    let url = format!("file://{}", project.source_repo.display());
+    let manifest = format!(
+        r#"
+enozunu config-version=1 {{
+  provider {{
+    skills {{
+      skill "demo-skill" {{
+        git {{
+          url "{url}"
+          branch "main"
+          path "skills/demo-skill"
+        }}
+      }}
+    }}
+  }}
+  consumer {{
+    claude {{ use-skills "demo-skill" }}
+    codex {{ use-skills "demo-skill" }}
+  }}
+}}
+"#
+    );
+    fs::write(project.root.join("enozunu.kdl"), manifest).unwrap();
+
+    let diags = materialize(&project).unwrap_err();
+    assert!(
+        diags
+            .iter()
+            .any(|d| d.code == DiagnosticCode::ArtifactShape)
+    );
+    // Neither target's output directory is created when validation fails up front.
+    assert!(!project.root.join(".claude").exists());
+    assert!(!project.root.join(".agents").exists());
+}
+
 #[test]
 fn materializes_skill_and_agent_into_claude_paths() {
     let project = setup();

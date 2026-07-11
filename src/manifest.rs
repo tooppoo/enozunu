@@ -57,7 +57,7 @@ pub struct SourceDecl {
 ///
 /// v0.0.x accepts only these kinds; shorthand forms are rejected during validation.
 /// `gist` is accepted only under `provider.agents`; a `gist` block under `provider.skills` is rejected.
-/// See docs/manifest.md for the supported source reference policy.
+/// See docs/guide/manifest.md for the supported source reference policy.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SourceReference {
     Git {

@@ -283,7 +283,7 @@ fn canonicalize_target(path: &Path) -> Result<PathBuf, Diagnostic> {
 }
 
 /// Shape checks shared by Git and local sources: validation is shape-based, not origin-based.
-/// See docs/adr/20260708T104202Z_no-source-origin-validation.md.
+/// See docs/design/adr/20260708T104202Z_no-source-origin-validation.md.
 fn check_artifact_shape(
     entry: &PlannedMaterialization,
     source_canon: &Path,
@@ -329,7 +329,7 @@ fn check_artifact_shape(
 /// Writes a checked materialization to its target path.
 ///
 /// Existing targets are replaced, not merged, so files removed from the source also disappear from the target.
-/// See docs/generated-output.md for the replace-semantics policy.
+/// See docs/design/adr/20260708T104205Z_generated-output-replace-semantics.md for the replace-semantics policy.
 pub fn execute(checked: &CheckedMaterialization) -> Result<(), Diagnostic> {
     let target = &checked.target_abs;
 

@@ -107,9 +107,16 @@ enozunu.kdl                 # human-authored configuration
 
 ## Documentation
 
-- [Philosophy](docs/philosophy.md)
-- [Why or why not Enozunu?](docs/why-or-why-not.md)
-- [v0.0.x goal](docs/v0.0.x-goal.md)
-- [Manifest format](docs/manifest.md)
-- [Generated output policy](docs/generated-output.md)
-- [Architecture Decision Records](docs/adr/README.md)
+The [documentation](docs/README.md) is split by intent.
+
+To use Enozunu, read [the guide](docs/guide/README.md):
+
+- [Why or why not Enozunu?](docs/guide/why-or-why-not.md)
+- [Manifest format](docs/guide/manifest.md)
+- [Generated output](docs/guide/generated-output.md)
+
+To understand how Enozunu works, read [the design docs](docs/design/README.md):
+
+- [Philosophy](docs/design/philosophy.md)
+- [v0.0.x goal](docs/design/v0.0.x-goal.md)
+- [Architecture Decision Records](docs/design/adr/README.md)

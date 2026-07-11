@@ -7,7 +7,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use crate::diagnostics::{Diagnostic, DiagnosticCode};
-use crate::manifest::SourceReference;
+use crate::manifest::{GistArtifactSelector, SourceReference};
 use crate::plan::{ArtifactKind, PlannedMaterialization};
 
 /// A materialization whose source shape and path containment are already verified.
@@ -22,7 +22,7 @@ pub struct CheckedMaterialization {
 
 /// Verifies the source artifact for `entry` without touching the target.
 ///
-/// `source_base` is the resolved checkout directory for Git references and the manifest file's containing directory for local references.
+/// `source_base` is the exported content root for Git and Gist references and the manifest file's containing directory for local references.
 /// `planned_target_rel_paths` lists every target path the current run will write; local sources are checked for overlap against all of them, because any of those writes could destroy an overlapping local source mid-run.
 pub fn check(
     entry: &PlannedMaterialization,
@@ -41,30 +41,75 @@ pub fn check(
             project_root,
             planned_target_rel_paths,
         ),
-        SourceReference::Gist { file, .. } => {
-            check_gist_source(entry, file, source_base, project_root)
-        }
+        SourceReference::Gist { selector, .. } => match selector {
+            GistArtifactSelector::Root => check_gist_root_source(entry, source_base, project_root),
+            GistArtifactSelector::File { path } => {
+                check_gist_file_source(entry, path, source_base, project_root)
+            }
+        },
     }
 }
 
-/// Verifies a Gist agent artifact inside its resolved checkout.
+/// Verifies a Gist Skill artifact: the exported revision root itself.
 ///
-/// A missing file is reported as `SourcePathNotFound` and a non-file artifact as `ArtifactShape`, so a mistyped `file` is distinguished from a `file` that points at a directory.
-/// Containment is enforced after canonicalization, so a symlink whose target escapes the checkout is rejected even though Git transport produced the checkout.
-fn check_gist_source(
+/// The root is the artifact, so shape checks apply to it directly: it must be a directory containing a regular-file `SKILL.md`, and the tree follows the same symlink policy as every other Skill source.
+fn check_gist_root_source(
     entry: &PlannedMaterialization,
-    file: &str,
-    checkout_dir: &Path,
+    content_root: &Path,
     project_root: &Path,
 ) -> Result<CheckedMaterialization, Diagnostic> {
-    let checkout_canon = checkout_dir.canonicalize().map_err(|e| {
+    let root_canon = content_root.canonicalize().map_err(|e| {
         Diagnostic::new(
             DiagnosticCode::Io,
-            format!("failed to resolve gist checkout directory: {e}"),
+            format!("failed to resolve gist content root: {e}"),
         )
     })?;
 
-    let source_abs = checkout_canon.join(file);
+    if !root_canon.is_dir() {
+        return Err(Diagnostic::new(
+            DiagnosticCode::ArtifactShape,
+            format!(
+                "skill `{}`: gist revision root is not a directory",
+                entry.source_name
+            ),
+        ));
+    }
+    if !root_canon.join("SKILL.md").is_file() {
+        return Err(Diagnostic::new(
+            DiagnosticCode::ArtifactShape,
+            format!(
+                "skill `{}`: gist revision root does not contain SKILL.md",
+                entry.source_name
+            ),
+        ));
+    }
+    reject_symlinks(&root_canon, &entry.source_name)?;
+
+    Ok(CheckedMaterialization {
+        source_abs: root_canon,
+        target_abs: project_root.join(&entry.target_rel_path),
+        kind: entry.kind,
+    })
+}
+
+/// Verifies a Gist agent artifact inside its exported content root.
+///
+/// A missing file is reported as `SourcePathNotFound` and a non-file artifact as `ArtifactShape`, so a mistyped `file` is distinguished from a `file` that points at a directory.
+/// Containment is enforced after canonicalization, so a symlink whose target escapes the exported content is rejected even though Git transport produced it.
+fn check_gist_file_source(
+    entry: &PlannedMaterialization,
+    file: &str,
+    content_root: &Path,
+    project_root: &Path,
+) -> Result<CheckedMaterialization, Diagnostic> {
+    let root_canon = content_root.canonicalize().map_err(|e| {
+        Diagnostic::new(
+            DiagnosticCode::Io,
+            format!("failed to resolve gist content root: {e}"),
+        )
+    })?;
+
+    let source_abs = root_canon.join(file);
     let source_canon = source_abs.canonicalize().map_err(|_| {
         Diagnostic::new(
             DiagnosticCode::SourcePathNotFound,
@@ -75,8 +120,8 @@ fn check_gist_source(
         )
     })?;
 
-    // Canonicalization resolves symlinks, so this containment check also rejects a link whose target points outside the checkout.
-    if !source_canon.starts_with(&checkout_canon) {
+    // Canonicalization resolves symlinks, so this containment check also rejects a link whose target points outside the exported content.
+    if !source_canon.starts_with(&root_canon) {
         return Err(Diagnostic::new(
             DiagnosticCode::UnsafePath,
             format!(
@@ -107,10 +152,10 @@ fn check_gist_source(
 fn check_git_source(
     entry: &PlannedMaterialization,
     source_path: &str,
-    checkout_dir: &Path,
+    content_root: &Path,
     project_root: &Path,
 ) -> Result<CheckedMaterialization, Diagnostic> {
-    let checkout_canon = checkout_dir.canonicalize().map_err(|e| {
+    let checkout_canon = content_root.canonicalize().map_err(|e| {
         Diagnostic::new(
             DiagnosticCode::Io,
             format!("failed to resolve checkout directory: {e}"),

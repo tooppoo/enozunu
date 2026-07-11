@@ -30,7 +30,8 @@ pub struct ProvenanceEntry {
 
 /// Source-kind-specific provenance fields, tagged so consumers can dispatch on `type` instead of probing for Git-only fields.
 ///
-/// A Gist source records `type: "gist"` with its id, pinned revision, and selected file; it is never represented as `type: "git"` even though Git transport materialized it.
+/// A Gist source records `type: "gist"` with its id and pinned revision; it is never represented as `type: "git"` even though Git transport materialized it.
+/// `file` is present only for agent Gists, which select one file; a Skill Gist materializes the revision root and records no `file` key.
 #[derive(Debug, Serialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
 pub enum ProvenanceSource {
@@ -47,7 +48,8 @@ pub enum ProvenanceSource {
     Gist {
         id: String,
         revision: String,
-        file: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        file: Option<String>,
     },
 }
 

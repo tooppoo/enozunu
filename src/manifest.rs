@@ -53,10 +53,21 @@ pub struct SourceDecl {
     pub reference: SourceReference,
 }
 
+/// How a Gist source selects its artifact inside the resolved revision.
+///
+/// The Skill/agent difference is a typed selector rather than an optional `file`, so a root-selecting Skill Gist can never carry a stray `file` value into resolution or materialization.
+/// The parser guarantees the mapping: `provider.skills` + `gist` produces `Root`, and `provider.agents` + `gist` produces `File`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum GistArtifactSelector {
+    /// The root of the pinned Gist revision is the artifact (Skill sources).
+    Root,
+    /// One file inside the pinned Gist revision is the artifact (agent sources).
+    File { path: String },
+}
+
 /// A tagged source reference: exactly one `git`, `local`, or `gist` block per source declaration.
 ///
 /// v0.0.x accepts only these kinds; shorthand forms are rejected during validation.
-/// `gist` is accepted only under `provider.agents`; a `gist` block under `provider.skills` is rejected.
 /// See docs/guide/manifest.md for the supported source reference policy.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SourceReference {
@@ -71,7 +82,7 @@ pub enum SourceReference {
     Gist {
         id: GistId,
         revision: CommitSha,
-        file: String,
+        selector: GistArtifactSelector,
     },
 }
 
@@ -290,17 +301,6 @@ fn parse_source_reference(
         }
     }
 
-    // Gist sources are agent-only in this Issue; a `gist` block under `provider.skills` is rejected rather than parsed.
-    if kind != "agent" && !gist_blocks.is_empty() {
-        diags.push(Diagnostic::new(
-            DiagnosticCode::UnsupportedSourceReference,
-            format!(
-                "{kind} `{name}` uses a `gist` source reference block, which is supported only for agents"
-            ),
-        ));
-        ok = false;
-    }
-
     let total = git_blocks.len() + local_blocks.len() + gist_blocks.len();
     let reference = if total == 0 {
         diags.push(Diagnostic::new(
@@ -323,12 +323,7 @@ fn parse_source_reference(
     } else if let [local] = local_blocks.as_slice() {
         parse_local_reference(local, kind, name, diags)
     } else if let [gist] = gist_blocks.as_slice() {
-        // A `gist` under a non-agent kind is already reported above; do not also emit field-level diagnostics for it.
-        if kind == "agent" {
-            parse_gist_reference(gist, kind, name, diags)
-        } else {
-            None
-        }
+        parse_gist_reference(gist, kind, name, diags)
     } else {
         None
     };
@@ -514,11 +509,19 @@ fn parse_gist_reference(
     name: &str,
     diags: &mut Vec<Diagnostic>,
 ) -> Option<SourceReference> {
+    // A Skill Gist selects the pinned revision root, so `file` is part of the agent contract only.
+    let file_supported = kind == "agent";
+    let accepted_fields = if file_supported {
+        "id + revision + file"
+    } else {
+        "id + revision"
+    };
+
     if first_string_arg(node).is_some() {
         diags.push(Diagnostic::new(
             DiagnosticCode::ManifestShape,
             format!(
-                "`gist` block of {kind} `{name}` takes no argument; declare `id`, `revision`, and `file` inside the block"
+                "`gist` block of {kind} `{name}` takes no argument; declare {accepted_fields} inside the block"
             ),
         ));
         return None;
@@ -537,7 +540,7 @@ fn parse_gist_reference(
             let slot = match field_name {
                 "id" => Some(&mut id),
                 "revision" => Some(&mut revision),
-                "file" => Some(&mut file),
+                "file" if file_supported => Some(&mut file),
                 _ => None,
             };
             match (slot, value) {
@@ -565,7 +568,7 @@ fn parse_gist_reference(
                     diags.push(Diagnostic::new(
                         DiagnosticCode::UnsupportedSourceReference,
                         format!(
-                            "`gist` block of {kind} `{name}` uses unsupported field `{field_name}`; it accepts only id + revision + file"
+                            "`gist` block of {kind} `{name}` uses unsupported field `{field_name}`; it accepts only {accepted_fields}"
                         ),
                     ));
                     ok = false;
@@ -574,7 +577,11 @@ fn parse_gist_reference(
         }
     }
 
-    for (field, value) in [("id", &id), ("revision", &revision), ("file", &file)] {
+    let mut required = vec![("id", &id), ("revision", &revision)];
+    if file_supported {
+        required.push(("file", &file));
+    }
+    for (field, value) in required {
         if value.is_none() {
             diags.push(Diagnostic::new(
                 DiagnosticCode::ManifestShape,
@@ -590,7 +597,6 @@ fn parse_gist_reference(
 
     let id_raw = id.unwrap();
     let revision_raw = revision.unwrap();
-    let file = file.unwrap();
 
     let Some(id) = GistId::parse(&id_raw) else {
         diags.push(Diagnostic::new(
@@ -612,13 +618,22 @@ fn parse_gist_reference(
         return None;
     };
 
-    // The `file` path follows the same safe-relative-path policy as a Git source path; it is resolved and containment-checked against the Gist checkout during materialization.
-    if let Err(d) = validate_source_path(&file, kind, name) {
-        diags.push(d);
-        return None;
-    }
+    let selector = if let Some(file) = file {
+        // The `file` path follows the same safe-relative-path policy as a Git source path; it is resolved and containment-checked against the exported Gist content during materialization.
+        if let Err(d) = validate_source_path(&file, kind, name) {
+            diags.push(d);
+            return None;
+        }
+        GistArtifactSelector::File { path: file }
+    } else {
+        GistArtifactSelector::Root
+    };
 
-    Some(SourceReference::Gist { id, revision, file })
+    Some(SourceReference::Gist {
+        id,
+        revision,
+        selector,
+    })
 }
 
 fn parse_consumer(node: &KdlNode, diags: &mut Vec<Diagnostic>) -> Consumer {
@@ -1272,7 +1287,11 @@ enozunu config-version=1 {
 }
 "#;
         let manifest = parse(text).unwrap();
-        let SourceReference::Gist { id, revision, file } = &manifest.provider.agents[0].reference
+        let SourceReference::Gist {
+            id,
+            revision,
+            selector,
+        } = &manifest.provider.agents[0].reference
         else {
             panic!("expected a gist source reference");
         };
@@ -1281,11 +1300,95 @@ enozunu config-version=1 {
             revision.as_str(),
             "468aac8caed5f0c3b859b8286968e2c78e2b8760"
         );
-        assert_eq!(file, "shell-script-reviewer.md");
+        assert_eq!(
+            selector,
+            &GistArtifactSelector::File {
+                path: "shell-script-reviewer.md".to_owned()
+            }
+        );
+    }
+
+    /// Wraps a `gist { ... }` block body in a skill declaration, without selecting it, so tests exercise Skill Gist parsing in isolation.
+    fn skill_gist(gist_body: &str) -> String {
+        format!(
+            r#"
+enozunu config-version=1 {{
+  provider {{
+    skills {{
+      skill "semantic-line-breaks" {{
+        gist {{
+{gist_body}
+        }}
+      }}
+    }}
+  }}
+  consumer {{ claude {{}} }}
+}}
+"#
+        )
     }
 
     #[test]
-    fn rejects_gist_under_a_skill() {
+    fn parses_a_skill_gist_as_a_root_selector() {
+        let text = skill_gist(
+            r#"          id "2decf6c462d9b4418f2"
+          revision "468aac8caed5f0c3b859b8286968e2c78e2b8760""#,
+        );
+        let manifest = parse(&text).unwrap();
+        let SourceReference::Gist {
+            id,
+            revision,
+            selector,
+        } = &manifest.provider.skills[0].reference
+        else {
+            panic!("expected a gist source reference");
+        };
+        assert_eq!(id.as_str(), "2decf6c462d9b4418f2");
+        assert_eq!(
+            revision.as_str(),
+            "468aac8caed5f0c3b859b8286968e2c78e2b8760"
+        );
+        assert_eq!(selector, &GistArtifactSelector::Root);
+    }
+
+    #[test]
+    fn rejects_file_inside_a_skill_gist() {
+        let text = skill_gist(
+            r#"          id "2decf6c462d9b4418f2"
+          revision "468aac8caed5f0c3b859b8286968e2c78e2b8760"
+          file "a.md""#,
+        );
+        assert!(codes(parse(&text)).contains(&DiagnosticCode::UnsupportedSourceReference));
+    }
+
+    #[test]
+    fn rejects_unknown_field_inside_a_skill_gist() {
+        let text = skill_gist(
+            r#"          id "2decf6c462d9b4418f2"
+          revision "468aac8caed5f0c3b859b8286968e2c78e2b8760"
+          owner "monalisa""#,
+        );
+        assert!(codes(parse(&text)).contains(&DiagnosticCode::UnsupportedSourceReference));
+    }
+
+    #[test]
+    fn rejects_a_skill_gist_missing_a_required_field() {
+        let text = skill_gist(r#"          id "2decf6c462d9b4418f2""#);
+        assert!(codes(parse(&text)).contains(&DiagnosticCode::ManifestShape));
+    }
+
+    #[test]
+    fn rejects_a_duplicate_skill_gist_field() {
+        let text = skill_gist(
+            r#"          id "2decf6c462d9b4418f2"
+          revision "468aac8caed5f0c3b859b8286968e2c78e2b8760"
+          revision "468aac8caed5f0c3b859b8286968e2c78e2b8760""#,
+        );
+        assert!(codes(parse(&text)).contains(&DiagnosticCode::ManifestShape));
+    }
+
+    #[test]
+    fn rejects_a_skill_gist_combined_with_git() {
         let text = r#"
 enozunu config-version=1 {
   provider {
@@ -1294,7 +1397,11 @@ enozunu config-version=1 {
         gist {
           id "2decf6c462d9b4418f2"
           revision "468aac8caed5f0c3b859b8286968e2c78e2b8760"
-          file "a.md"
+        }
+        git {
+          url "https://example.com/r"
+          branch "main"
+          path "s/a"
         }
       }
     }
@@ -1302,7 +1409,7 @@ enozunu config-version=1 {
   consumer { claude {} }
 }
 "#;
-        assert!(codes(parse(text)).contains(&DiagnosticCode::UnsupportedSourceReference));
+        assert!(codes(parse(text)).contains(&DiagnosticCode::ManifestShape));
     }
 
     #[test]

@@ -5,7 +5,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use enozunu::diagnostics::DiagnosticCode;
-use enozunu::git::CommandGitResolver;
+use enozunu::git::{CommandGitResolver, CommitSha, GitResolutionRequest, GitResolver, GitSelector};
 
 struct TestProject {
     _tmp: tempfile::TempDir,
@@ -714,4 +714,122 @@ fn follows_branch_updates_across_runs() {
 
     let agent = fs::read_to_string(project.root.join(".claude/agents/demo-agent.md")).unwrap();
     assert_eq!(agent, "# demo agent v2\n");
+}
+
+// Resolver/export boundary tests: the production resolver must hand materialization a content tree equal to the clean working tree, minus Git metadata.
+
+fn rev_parse(repo: &Path, spec: &str) -> String {
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(repo)
+        .args(["rev-parse", spec])
+        .output()
+        .unwrap();
+    String::from_utf8_lossy(&out.stdout).trim().to_owned()
+}
+
+fn branch_request(project: &TestProject) -> GitResolutionRequest {
+    GitResolutionRequest {
+        url: format!("file://{}", project.source_repo.display()),
+        selector: GitSelector::Branch("main".to_owned()),
+    }
+}
+
+#[test]
+fn resolver_exports_a_content_tree_without_git_metadata() {
+    let project = setup();
+    let resolver = CommandGitResolver::new(project.root.join(".enozunu/cache"));
+
+    let resolved = resolver.resolve(&branch_request(&project)).unwrap();
+
+    // The exported content equals the clean working tree.
+    assert_eq!(
+        fs::read_to_string(resolved.content_root.join("skills/demo-skill/SKILL.md")).unwrap(),
+        "# demo skill\n"
+    );
+    assert_eq!(
+        fs::read_to_string(resolved.content_root.join("agents/demo-agent.md")).unwrap(),
+        "# demo agent\n"
+    );
+    // The content root carries no Git repository metadata, so materialization never reads a resolver cache checkout.
+    assert!(!resolved.content_root.join(".git").exists());
+    assert_eq!(resolved.commit, rev_parse(&project.source_repo, "main"));
+}
+
+#[test]
+#[cfg(unix)]
+fn resolver_export_preserves_the_executable_file_mode() {
+    use std::os::unix::fs::PermissionsExt;
+    let project = setup();
+    let script = project.source_repo.join("run.sh");
+    fs::write(&script, "#!/bin/sh\n").unwrap();
+    fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
+    commit_all(&project.source_repo, "add executable");
+
+    let resolver = CommandGitResolver::new(project.root.join(".enozunu/cache"));
+    let resolved = resolver.resolve(&branch_request(&project)).unwrap();
+
+    let mode = fs::metadata(resolved.content_root.join("run.sh"))
+        .unwrap()
+        .permissions()
+        .mode();
+    assert_ne!(mode & 0o111, 0, "executable bit must survive the export");
+}
+
+#[test]
+fn resolver_resolves_a_pinned_non_head_revision() {
+    let project = setup();
+    let pinned = rev_parse(&project.source_repo, "main");
+    // Advance the branch so the pinned revision is no longer HEAD.
+    fs::write(
+        project.source_repo.join("agents/demo-agent.md"),
+        "# demo agent v2\n",
+    )
+    .unwrap();
+    commit_all(&project.source_repo, "advance past the pinned revision");
+
+    let resolver = CommandGitResolver::new(project.root.join(".enozunu/cache"));
+    let resolved = resolver
+        .resolve(&GitResolutionRequest {
+            url: format!("file://{}", project.source_repo.display()),
+            selector: GitSelector::Revision(CommitSha::parse(&pinned).unwrap()),
+        })
+        .unwrap();
+
+    assert_eq!(resolved.commit, pinned);
+    // The export reflects the pinned revision, not the advanced branch tip.
+    assert_eq!(
+        fs::read_to_string(resolved.content_root.join("agents/demo-agent.md")).unwrap(),
+        "# demo agent\n"
+    );
+    assert!(!resolved.content_root.join(".git").exists());
+}
+
+#[test]
+fn resolver_export_drops_stale_files_from_a_previous_resolution() {
+    let project = setup();
+    let resolver = CommandGitResolver::new(project.root.join(".enozunu/cache"));
+
+    let first = resolver.resolve(&branch_request(&project)).unwrap();
+    // Simulate a leftover file from earlier processing inside the exported tree.
+    fs::write(first.content_root.join("stale.txt"), "stale\n").unwrap();
+    // Remove a tracked file so the next export must not carry it over either.
+    fs::remove_file(project.source_repo.join("skills/demo-skill/helper.txt")).unwrap();
+    commit_all(&project.source_repo, "remove helper");
+
+    let second = resolver.resolve(&branch_request(&project)).unwrap();
+
+    assert!(!second.content_root.join("stale.txt").exists());
+    assert!(
+        !second
+            .content_root
+            .join("skills/demo-skill/helper.txt")
+            .exists()
+    );
+    assert!(
+        second
+            .content_root
+            .join("skills/demo-skill/SKILL.md")
+            .is_file()
+    );
 }

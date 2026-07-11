@@ -41,7 +41,67 @@ pub fn check(
             project_root,
             planned_target_rel_paths,
         ),
+        SourceReference::Gist { file, .. } => {
+            check_gist_source(entry, file, source_base, project_root)
+        }
     }
+}
+
+/// Verifies a Gist agent artifact inside its resolved checkout.
+///
+/// A missing file is reported as `SourcePathNotFound` and a non-file artifact as `ArtifactShape`, so a mistyped `file` is distinguished from a `file` that points at a directory.
+/// Containment is enforced after canonicalization, so a symlink whose target escapes the checkout is rejected even though Git transport produced the checkout.
+fn check_gist_source(
+    entry: &PlannedMaterialization,
+    file: &str,
+    checkout_dir: &Path,
+    project_root: &Path,
+) -> Result<CheckedMaterialization, Diagnostic> {
+    let checkout_canon = checkout_dir.canonicalize().map_err(|e| {
+        Diagnostic::new(
+            DiagnosticCode::Io,
+            format!("failed to resolve gist checkout directory: {e}"),
+        )
+    })?;
+
+    let source_abs = checkout_canon.join(file);
+    let source_canon = source_abs.canonicalize().map_err(|_| {
+        Diagnostic::new(
+            DiagnosticCode::SourcePathNotFound,
+            format!(
+                "agent `{}`: gist file `{}` does not exist in the resolved revision",
+                entry.source_name, file
+            ),
+        )
+    })?;
+
+    // Canonicalization resolves symlinks, so this containment check also rejects a link whose target points outside the checkout.
+    if !source_canon.starts_with(&checkout_canon) {
+        return Err(Diagnostic::new(
+            DiagnosticCode::UnsafePath,
+            format!(
+                "agent `{}`: gist file `{}` escapes the resolved revision",
+                entry.source_name, file
+            ),
+        ));
+    }
+
+    // A Gist agent artifact must be a regular file; `file` pointing at a directory (the Gist root or a subdirectory) is a shape error.
+    if !source_canon.is_file() {
+        return Err(Diagnostic::new(
+            DiagnosticCode::ArtifactShape,
+            format!(
+                "agent `{}`: gist file `{}` is not a regular file",
+                entry.source_name, file
+            ),
+        ));
+    }
+
+    Ok(CheckedMaterialization {
+        source_abs: source_canon,
+        target_abs: project_root.join(&entry.target_rel_path),
+        kind: entry.kind,
+    })
 }
 
 fn check_git_source(

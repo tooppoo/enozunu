@@ -3,6 +3,7 @@
 //! The pipeline is: parse and validate the manifest, plan target paths, resolve Git and local sources, check every artifact, then write outputs and the provenance record.
 
 pub mod diagnostics;
+pub mod gist;
 pub mod git;
 pub mod init;
 pub mod manifest;
@@ -14,7 +15,8 @@ use std::collections::HashMap;
 use std::path::Path;
 
 use diagnostics::{Diagnostic, DiagnosticCode};
-use git::{GitResolver, ResolvedSource};
+use gist::{GistRequest, GistResolver, GitTransportGistResolver};
+use git::{GitError, GitResolutionRequest, GitResolver, GitSelector, ResolvedSource};
 use manifest::SourceReference;
 use plan::PlannedMaterialization;
 use provenance::{ProvenanceEntry, ProvenanceRecord, ProvenanceSource};
@@ -24,11 +26,25 @@ pub const PROVENANCE_VERSION: u32 = 1;
 
 /// What a source reference resolved to in this run.
 ///
-/// Only Git sources have a resolved revision; local sources report their canonical path instead.
+/// Each variant preserves the identity of its source kind: a Git source reports its resolved revision, a local source its canonical path, and a Gist source its id and pinned revision. A Gist is kept distinct from a Git origin even though Git transport materialized it.
 #[derive(Debug)]
 pub enum ResolvedOrigin {
     Git { revision: String },
     Local { resolved_path: String },
+    Gist { id: String, revision: String },
+}
+
+impl ResolvedOrigin {
+    /// Renders the origin for CLI output, keeping each source kind identifiable.
+    ///
+    /// A Gist is rendered as `gist: <id>@<revision>` so materialized Gist sources are never mistaken for ordinary Git sources.
+    pub fn describe(&self) -> String {
+        match self {
+            ResolvedOrigin::Git { revision } => revision.clone(),
+            ResolvedOrigin::Local { resolved_path } => format!("local: {resolved_path}"),
+            ResolvedOrigin::Gist { id, revision } => format!("gist: {id}@{revision}"),
+        }
+    }
 }
 
 /// The outcome of one materialized entry, reported back to the CLI.
@@ -69,6 +85,9 @@ pub fn run_materialize(
     };
 
     let resolved = resolve_git_sources(&planned, resolver)?;
+    // Gist sources resolve over the same Git transport, but through the Gist boundary so failures carry Gist-specific diagnostic codes.
+    let gist_resolver = GitTransportGistResolver::new(resolver);
+    let resolved_gists = resolve_gist_sources(&planned, &gist_resolver)?;
 
     // Local sources are checked against every target this run writes, not only their own.
     let target_rel_paths: Vec<String> = planned
@@ -84,6 +103,9 @@ pub fn run_materialize(
                 &resolved[&(url.clone(), branch.clone())].checkout_dir
             }
             SourceReference::Local { .. } => manifest_dir,
+            SourceReference::Gist { id, revision, .. } => {
+                &resolved_gists[&gist_key(id, revision)].checkout_dir
+            }
         };
         match materialize::check(entry, source_base, project_root, &target_rel_paths) {
             Ok(c) => {
@@ -93,6 +115,10 @@ pub fn run_materialize(
                     },
                     SourceReference::Local { .. } => ResolvedOrigin::Local {
                         resolved_path: c.source_abs.display().to_string(),
+                    },
+                    SourceReference::Gist { id, revision, .. } => ResolvedOrigin::Gist {
+                        id: id.as_str().to_owned(),
+                        revision: resolved_gists[&gist_key(id, revision)].commit.clone(),
                     },
                 };
                 checked.push((entry, origin, c));
@@ -151,14 +177,29 @@ fn provenance_source(reference: &SourceReference, origin: &ResolvedOrigin) -> Pr
                 resolved_path: resolved_path.clone(),
             }
         }
+        // The resolved revision equals the pinned revision (checkout is verified against it), so it is recorded as `gist`, never as `git`, even though Git transport produced it.
+        (SourceReference::Gist { file, .. }, ResolvedOrigin::Gist { id, revision }) => {
+            ProvenanceSource::Gist {
+                id: id.clone(),
+                revision: revision.clone(),
+                file: file.clone(),
+            }
+        }
         // The origin is constructed from the reference in run_materialize, so the variants always match.
         _ => unreachable!("resolved origin kind diverged from its source reference kind"),
     }
 }
 
+/// The immutable cache key for a Gist checkout: `(id, revision)`.
+///
+/// The selected file is not part of the key, so multiple agents selecting different files from one Gist revision share a single resolved checkout.
+fn gist_key(id: &manifest::GistId, revision: &git::CommitSha) -> (String, String) {
+    (id.as_str().to_owned(), revision.as_str().to_owned())
+}
+
 /// Resolves each distinct Git (url, branch) pair once so a single run sees one consistent commit per branch.
 ///
-/// Local references need no resolver: their path is checked directly against the filesystem.
+/// Local and Gist references are skipped here: local paths are checked directly against the filesystem, and Gist sources resolve through the Gist boundary.
 fn resolve_git_sources(
     planned: &[PlannedMaterialization],
     resolver: &dyn GitResolver,
@@ -173,7 +214,56 @@ fn resolve_git_sources(
         if resolved.contains_key(&key) {
             continue;
         }
-        match resolver.resolve(url, branch) {
+        let request = GitResolutionRequest {
+            url: url.clone(),
+            selector: GitSelector::Branch(branch.clone()),
+        };
+        match resolver.resolve(&request) {
+            Ok(source) => {
+                resolved.insert(key, source);
+            }
+            Err(e) => diags.push(git_error_diagnostic(e)),
+        }
+    }
+    if diags.is_empty() {
+        Ok(resolved)
+    } else {
+        Err(diags)
+    }
+}
+
+/// Maps a Git-source transport failure to a diagnostic.
+///
+/// For a Git source, both a fetch failure and an unresolved branch are `GitResolution`; only a local filesystem failure is `Io`. Gist sources use their own mapping so their transport failures are not reported as `GitResolution`.
+fn git_error_diagnostic(error: GitError) -> Diagnostic {
+    match error {
+        GitError::Fetch(message) | GitError::RevisionNotFound(message) => {
+            Diagnostic::new(DiagnosticCode::GitResolution, message)
+        }
+        GitError::Io(message) => Diagnostic::new(DiagnosticCode::Io, message),
+    }
+}
+
+/// Resolves each distinct Gist `(id, revision)` once so agents selecting different files from the same revision share one checkout.
+fn resolve_gist_sources(
+    planned: &[PlannedMaterialization],
+    resolver: &dyn GistResolver,
+) -> Result<HashMap<(String, String), ResolvedSource>, Vec<Diagnostic>> {
+    let mut resolved = HashMap::new();
+    let mut diags = Vec::new();
+    for entry in planned {
+        let SourceReference::Gist { id, revision, .. } = &entry.reference else {
+            continue;
+        };
+        let key = gist_key(id, revision);
+        if resolved.contains_key(&key) {
+            continue;
+        }
+        let request = GistRequest {
+            id: id.clone(),
+            revision: revision.clone(),
+        };
+        match resolver.resolve(&request) {
             Ok(source) => {
                 resolved.insert(key, source);
             }
@@ -184,5 +274,36 @@ fn resolve_git_sources(
         Ok(resolved)
     } else {
         Err(diags)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn describe_keeps_each_origin_kind_identifiable() {
+        assert_eq!(
+            ResolvedOrigin::Git {
+                revision: "abc123".to_owned()
+            }
+            .describe(),
+            "abc123"
+        );
+        assert_eq!(
+            ResolvedOrigin::Local {
+                resolved_path: "/repo/skills/demo".to_owned()
+            }
+            .describe(),
+            "local: /repo/skills/demo"
+        );
+        assert_eq!(
+            ResolvedOrigin::Gist {
+                id: "2decf6c462d9b4418f2".to_owned(),
+                revision: "468aac8caed5f0c3b859b8286968e2c78e2b8760".to_owned(),
+            }
+            .describe(),
+            "gist: 2decf6c462d9b4418f2@468aac8caed5f0c3b859b8286968e2c78e2b8760"
+        );
     }
 }

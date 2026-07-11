@@ -35,7 +35,7 @@ pub enum DiagnosticCode {
     UnsupportedConfigVersion,
     /// The manifest selects a consumer target that v0.0.x does not support, such as `consumer.codex`.
     UnsupportedConsumer,
-    /// The source reference uses a form outside the supported `git` / `local` blocks, such as an unknown block kind, a GitHub tree/blob URL shorthand, or an absolute local path.
+    /// The source reference uses a form outside the supported `git` / `local` / `gist` blocks, such as an unknown block kind, a GitHub tree/blob URL shorthand, an absolute local path, or a `gist` block under `provider.skills`.
     UnsupportedSourceReference,
     /// Two sources of the same kind share a name.
     DuplicateSourceName,
@@ -43,10 +43,20 @@ pub enum DiagnosticCode {
     InvalidName,
     /// A `use-skills` / `use-agents` entry references a source that is not declared.
     UnknownSourceReference,
+    /// A `gist` block declares an `id` outside the v0 accepted form (non-empty lowercase ASCII hexadecimal).
+    InvalidGistId,
+    /// A `gist` block declares a `revision` outside the v0 accepted form (exactly 40 lowercase ASCII hexadecimal characters).
+    InvalidRevision,
     /// Two materializations resolve to the same target path.
     DuplicateTargetPath,
     /// Resolving a Git source failed.
     GitResolution,
+    /// A Gist remote could not be fetched. Distinct from `GitResolution` so Gist transport failures are classified as Gist failures even though Git transport is used internally.
+    GistFetch,
+    /// The pinned Gist revision does not exist in the fetched Gist.
+    GistRevisionNotFound,
+    /// A selected source path does not exist in the resolved source.
+    SourcePathNotFound,
     /// The resolved source does not have the artifact shape the target operation requires.
     ArtifactShape,
     /// A path would escape its permitted root via traversal or symlinks.
@@ -66,8 +76,13 @@ impl DiagnosticCode {
             DiagnosticCode::DuplicateSourceName => "duplicate-source-name",
             DiagnosticCode::InvalidName => "invalid-name",
             DiagnosticCode::UnknownSourceReference => "unknown-source-reference",
+            DiagnosticCode::InvalidGistId => "invalid-gist-id",
+            DiagnosticCode::InvalidRevision => "invalid-revision",
             DiagnosticCode::DuplicateTargetPath => "duplicate-target-path",
             DiagnosticCode::GitResolution => "git-resolution",
+            DiagnosticCode::GistFetch => "gist-fetch",
+            DiagnosticCode::GistRevisionNotFound => "gist-revision-not-found",
+            DiagnosticCode::SourcePathNotFound => "source-path-not-found",
             DiagnosticCode::ArtifactShape => "artifact-shape",
             DiagnosticCode::UnsafePath => "unsafe-path",
             DiagnosticCode::Io => "io",
@@ -107,8 +122,16 @@ mod tests {
                 DiagnosticCode::UnknownSourceReference,
                 "unknown-source-reference",
             ),
+            (DiagnosticCode::InvalidGistId, "invalid-gist-id"),
+            (DiagnosticCode::InvalidRevision, "invalid-revision"),
             (DiagnosticCode::DuplicateTargetPath, "duplicate-target-path"),
             (DiagnosticCode::GitResolution, "git-resolution"),
+            (DiagnosticCode::GistFetch, "gist-fetch"),
+            (
+                DiagnosticCode::GistRevisionNotFound,
+                "gist-revision-not-found",
+            ),
+            (DiagnosticCode::SourcePathNotFound, "source-path-not-found"),
             (DiagnosticCode::ArtifactShape, "artifact-shape"),
             (DiagnosticCode::UnsafePath, "unsafe-path"),
             (DiagnosticCode::Io, "io"),

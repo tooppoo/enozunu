@@ -21,7 +21,8 @@
         "skellock.just",
         "rust-lang.rust-analyzer",
         "tamasfe.even-better-toml",
-        "kdl-org.kdl"
+        "kdl-org.kdl",
+        "philomagi.reportage-vscode"
       ],
       "settings": {
         "editor.formatOnSave": true,

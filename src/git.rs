@@ -110,8 +110,10 @@ impl CommandGitResolver {
             .into_iter()
             .rev()
             .collect();
+        // The `v1` namespace keeps this layout apart from the pre-export layout, which used `cache_root/<key>` itself as the checkout; reusing that path would strand old checkouts and could collide with a repository that tracks a top-level `repo` entry.
         let base = self
             .cache_root
+            .join("v1")
             .join(format!("{prefix}-{:016x}", hasher.finish()));
         CacheEntry {
             repo: base.join("repo"),

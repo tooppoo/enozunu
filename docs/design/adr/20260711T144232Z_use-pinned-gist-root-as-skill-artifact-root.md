@@ -94,6 +94,7 @@ Skipping `.git` while copying would fix the immediate metadata leak but would ke
 
 - A Gist revision whose root lacks `SKILL.md` cannot be used as a Skill source; that is the same shape rule every other Skill source follows.
 - The `gist` block is the only source reference whose field set depends on the artifact kind.
+- The resolver cache moves to a versioned `v1/` layout so entries written by the pre-export layout are never misread or collided with; old entries are simply never touched again, because the cache is disposable and re-cloned on demand.
 
 ## Related
 

@@ -86,5 +86,33 @@
         }
       ]
     }
-  ]
+  ],
+  "installer_smoke_test": {
+    "installer_script": "install.sh",
+    "command": "enozunu",
+    "target_ids": [
+      "linux-x86_64",
+      "linux-aarch64",
+      "darwin-x86_64",
+      "darwin-arm64"
+    ],
+    "install_modes": [
+      "latest",
+      "pinned-latest-release"
+    ],
+    "checks": [
+      {
+        "id": "help",
+        "args": [
+          "--help"
+        ]
+      },
+      {
+        "id": "version",
+        "args": [
+          "--version"
+        ]
+      }
+    ]
+  }
 }

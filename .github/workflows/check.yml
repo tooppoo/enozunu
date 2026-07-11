@@ -56,3 +56,8 @@ jobs:
           use_oidc: true
           files: cov.json
           fail_ci_if_error: false
+
+  installer-smoke-test:
+    uses: tooppoo/github-release-workflows/.github/workflows/wf-installer-smoke-test.yml@main
+    with:
+      config_path: .github/workflows/artifacts.manifest.json

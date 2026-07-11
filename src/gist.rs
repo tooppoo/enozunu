@@ -2,7 +2,7 @@
 //!
 //! A Gist source is a first-class source kind, not a Git source. Git is only the transport used to fetch an immutable Gist revision.
 //! This module keeps that boundary explicit: it constructs the Gist Git remote from the Gist id, drives the `GitResolver` with an exact-revision selector, and translates transport failures into Gist-specific diagnostics.
-//! See docs/adr/20260710T220338Z_gist-first-class-source-reference.md for the source-identity-versus-transport decision.
+//! See docs/design/adr/20260710T220338Z_gist-first-class-source-reference.md for the source-identity-versus-transport decision.
 
 use crate::diagnostics::{Diagnostic, DiagnosticCode};
 use crate::git::{

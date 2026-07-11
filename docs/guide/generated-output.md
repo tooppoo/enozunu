@@ -1,25 +1,8 @@
-# Generated Output Policy
+# Generated Output
 
-Enozunu-managed target AI-native directories are generated output.
+Enozunu-managed target AI-native directories are generated output. For v0.0.x, this primarily means `.claude/`.
 
-For v0.0.x, this primarily means `.claude/`.
-
-## Source of Truth
-
-The primary source of truth is:
-
-```text
-enozunu.kdl
-```
-
-The generated target AI-native output is not source of truth.
-
-For v0.0.x, `enozunu.kdl` is human-authored KDL. `provenance.json` is machine-generated JSON.
-
-```text
-enozunu.kdl                 # human-authored configuration
-.enozunu/provenance.json    # machine-generated derived record
-```
+This guide is operational: what to commit, what regeneration does to your files, and how to inspect what was materialized. For why generated output is not treated as source of truth, see [the philosophy](../design/philosophy.md#generated-output-is-not-a-collaboration-surface). For the scope and policy behind it, see [the v0.0.x goal](../design/v0.0.x-goal.md).
 
 ## Git Management
 
@@ -53,10 +36,9 @@ If a project chooses to manually maintain `.claude/`,
 that directory should be treated as ordinary project configuration,
 not as Enozunu-generated output.
 
-## Replace Semantics
+## What Regeneration Does to Your Files
 
-Skill directory materialization uses replace semantics,
-not merge semantics.
+Skill directory materialization uses replace semantics, not merge semantics.
 
 When a Skill source is materialized to:
 
@@ -64,36 +46,24 @@ When a Skill source is materialized to:
 .claude/skills/<name>/
 ```
 
-that target directory should reflect the source directory.
+that target directory reflects the source directory after regeneration.
 
-If a supporting file is removed from the source, it should also be removed from the target after regeneration.
+If a supporting file is removed from the source, it is also removed from the target on the next regeneration. This avoids stale files remaining in generated output. The reasoning is recorded in [the replace-semantics ADR](../design/adr/20260708T104205Z_generated-output-replace-semantics.md).
 
-This avoids stale files remaining in generated output.
+## Editing Generated Output by Hand
 
-## Manual Edits
+Enozunu does not preserve, detect, merge, or reconcile manual edits inside generated output. A hand edit inside `.claude/` is not source of truth, and it is lost on the next regeneration.
 
-Enozunu does not aim to support both declarative management and manual edits inside generated output.
-
-If generated output is edited by hand, Enozunu does not promise to:
-
-- preserve that edit
-- detect that edit
-- merge that edit
-- reconcile that edit with the provider source
-
-Manual edits are not source of truth.
-
-If an edit should be durable,
-use one of these approaches:
+If an edit should be durable, use one of these approaches:
 
 1. change the provider-side source that Enozunu materializes
-2. explicitly Git-manage the target AI-native directory instead of treating it as generated output
+2. stop treating the target directory as generated output, and Git-manage it as ordinary project configuration
 
-## Provenance
+## Inspecting Provenance
 
 `.enozunu/provenance.json` records the previous materialization result.
 
-Each entry should include information such as:
+Each entry includes information such as:
 
 - source name
 - artifact kind
@@ -126,19 +96,6 @@ For a Gist source, the `source` object records:
 
 A Gist source is recorded as `type: "gist"`, never as `type: "git"`, even though Git transport materializes it. The recorded `revision` equals the pinned Gist revision.
 
-`provenance.json` is not a lockfile.
-It is not used as a resolution input in v0.0.x.
+`provenance.json` is not a lockfile. It is not used as a resolution input in v0.0.x.
 
 Because v0.0.x supports branch selectors, materializing the same manifest at different times may produce different results. The provenance record exists to make the previous result inspectable.
-
-## Out of Scope
-
-The following are outside v0.0.x:
-
-- target digest based hand-edit detection
-- generated output and manual edit reconciliation
-- lockfile-based reproducibility
-- frozen materialization
-- exact revision selector support
-
-These can be introduced later as separate design work.

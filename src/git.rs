@@ -1,7 +1,7 @@
 //! Resolves Git source references to concrete commits and local checkouts.
 //!
 //! Git operations stay behind the `GitResolver` trait so the external `git` command can later be replaced by a library implementation.
-//! See docs/adr/20260708T075713Z_implement-enozunu-in-rust.md for that decision.
+//! See docs/design/adr/20260708T075713Z_implement-enozunu-in-rust.md for that decision.
 //!
 //! Branch resolution and exact-revision resolution are separate selectors on one request, not one call whose contract is "branch".
 //! Keeping them type-distinct prevents an immutable revision from being silently resolved as if it were a branch name.

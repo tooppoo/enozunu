@@ -108,7 +108,7 @@ The following are invalid:
 - unsupported source reference blocks
 - a `gist` block under a Skill declaration
 
-The rationale for the block structure is recorded in [the source reference blocks ADR](adr/20260709T070553Z_source-reference-blocks-and-local-sources.md). The rationale for `gist` as a distinct source kind is recorded in [the Gist source reference ADR](adr/20260710T220338Z_gist-first-class-source-reference.md).
+The rationale for the block structure is recorded in [the source reference blocks ADR](../design/adr/20260709T070553Z_source-reference-blocks-and-local-sources.md). The rationale for `gist` as a distinct source kind is recorded in [the Gist source reference ADR](../design/adr/20260710T220338Z_gist-first-class-source-reference.md).
 
 ### Git Source Reference
 

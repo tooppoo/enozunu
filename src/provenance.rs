@@ -2,7 +2,7 @@
 //!
 //! `.enozunu/provenance.json` records what the previous materialization produced.
 //! It is not a lockfile and is not read back as a resolution input in v0.0.x.
-//! See docs/generated-output.md for the provenance policy.
+//! See docs/guide/generated-output.md for the provenance policy.
 
 use std::fs;
 use std::path::Path;

@@ -17,7 +17,7 @@ use std::path::Path;
 use diagnostics::{Diagnostic, DiagnosticCode};
 use gist::{GistRequest, GistResolver, GitTransportGistResolver};
 use git::{GitError, GitResolutionRequest, GitResolver, GitSelector, ResolvedSource};
-use manifest::{GistArtifactSelector, SourceReference};
+use manifest::{GistArtifactSelector, SourceReference, TargetAi};
 use plan::PlannedMaterialization;
 use provenance::{ProvenanceEntry, ProvenanceRecord, ProvenanceSource};
 
@@ -52,6 +52,7 @@ impl ResolvedOrigin {
 pub struct MaterializedEntry {
     pub source_name: String,
     pub kind: plan::ArtifactKind,
+    pub target_ai: TargetAi,
     pub origin: ResolvedOrigin,
     pub target_rel_path: String,
 }
@@ -138,12 +139,13 @@ pub fn run_materialize(
             source_name: entry.source_name.clone(),
             kind: entry.kind.as_str().to_owned(),
             source: provenance_source(&entry.reference, &origin),
-            target_ai: "claude".to_owned(),
+            target_ai: entry.target_ai.as_str().to_owned(),
             target_path: entry.target_rel_path.clone(),
         });
         results.push(MaterializedEntry {
             source_name: entry.source_name.clone(),
             kind: entry.kind,
+            target_ai: entry.target_ai,
             origin,
             target_rel_path: entry.target_rel_path.clone(),
         });

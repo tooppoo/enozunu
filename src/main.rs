@@ -83,10 +83,12 @@ fn main() -> ExitCode {
             let resolver = CommandGitResolver::new(project_root.join(".enozunu/cache"));
             enozunu::run_materialize(&manifest_path, &project_root, &resolver).map(|entries| {
                 for entry in &entries {
+                    // The target AI is named explicitly: a Codex Skill materializes to `.agents/skills/`, whose prefix does not itself read as "codex".
                     println!(
-                        "materialized {} `{}` -> {} ({})",
+                        "materialized {} `{}` for {} -> {} ({})",
                         entry.kind.as_str(),
                         entry.source_name,
+                        entry.target_ai.as_str(),
                         entry.target_rel_path,
                         entry.origin.describe()
                     );

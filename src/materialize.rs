@@ -451,7 +451,7 @@ fn io_diag(e: std::io::Error) -> Diagnostic {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::manifest::SourceReference;
+    use crate::manifest::{SourceReference, TargetAi};
 
     fn target_rel_path(kind: ArtifactKind) -> String {
         match kind {
@@ -469,6 +469,7 @@ mod tests {
                 branch: "main".to_owned(),
                 path: path.to_owned(),
             },
+            target_ai: TargetAi::Claude,
             target_rel_path: target_rel_path(kind),
         }
     }
@@ -480,6 +481,7 @@ mod tests {
             reference: SourceReference::Local {
                 path: path.to_owned(),
             },
+            target_ai: TargetAi::Claude,
             target_rel_path: target_rel_path(kind),
         }
     }

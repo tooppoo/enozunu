@@ -19,7 +19,7 @@ The job of Enozunu is narrower:
 declare source -> resolve source -> materialize to target AI-native path
 ```
 
-For v0.0.x, the only target AI is Claude.
+The supported target AIs are Claude and Codex. Enozunu materializes into each target's native path without converting the artifact between target formats. It does not convert a Claude Markdown agent into a Codex TOML agent, or the reverse. See [the Claude and Codex materialization ADR](adr/20260711T184657Z_materialize-claude-and-codex-without-semantic-conversion.md).
 
 ## Declarations, Not Runtime Semantics
 
@@ -35,21 +35,21 @@ Materialization belongs to Enozunu.
 
 ## No Source Origin Validation
 
-Enozunu does not validate whether a source was originally created for Claude.
+Enozunu does not validate which target AI a source was originally created for.
 
-A source URL or source path does not need to be under `.claude/`.
+A source URL or source path does not need to be under `.claude/` or any other target-specific location.
 A Skill source only needs to have the artifact shape Enozunu requires for the target operation.
 For v0.0.x, that means a Skill source is a directory containing `SKILL.md`.
 
 This preserves reuse.
-A user may reuse a Claude-distributed Skill elsewhere in the future,
-but whether it works as expected in another target AI is the user's responsibility.
+A user may reuse a Claude-distributed Skill from Codex, or the reverse,
+but whether it works as expected in the selecting target AI is the user's responsibility.
 
 ## Generated Output Is Not a Collaboration Surface
 
 Enozunu-managed target AI-native directories are generated output.
 
-For v0.0.x, `.claude/` may be generated from `enozunu.kdl`. Manual edits inside generated output are not treated as source of truth. Enozunu does not try to preserve, detect, or merge manual edits in generated output.
+Target AI-native directories such as `.claude/`, `.agents/`, and `.codex/` may be generated from `enozunu.kdl`. Manual edits inside generated output are not treated as source of truth. Enozunu does not try to preserve, detect, or merge manual edits in generated output.
 
 If manual editing is required,
 manage the target AI-native directory directly,

@@ -1,6 +1,6 @@
 # Generated Output
 
-Enozunu-managed target AI-native directories are generated output. For v0.0.x, this primarily means `.claude/`.
+Enozunu-managed target AI-native directories are generated output. For Claude this means `.claude/`. For Codex this means `.agents/` (Skills) and `.codex/` (custom agents).
 
 This guide is operational: what to commit, what regeneration does to your files, and how to inspect what was materialized. For why generated output is not treated as source of truth, see [the philosophy](../design/philosophy.md#generated-output-is-not-a-collaboration-surface). For the scope and policy behind it, see [the v0.0.x goal](../design/v0.0.x-goal.md).
 
@@ -17,22 +17,26 @@ Recommended Git-ignored files:
 
 ```text
 .claude/
+.agents/
+.codex/
 .enozunu/cache/
 ```
 
 `enozunu init` generates `.enozunu/.gitignore` containing `cache/`, so the resolver cache under `.enozunu/cache/` is ignored without manual setup.
 An existing `.enozunu/.gitignore` is left untouched, so a hand-edited file survives re-running `init`.
 
-The `.claude/` generated output lives at the repository root, outside `.enozunu`, so ignoring it remains a manual choice.
+The target AI-native output lives at the repository root, outside `.enozunu`, so ignoring it remains a manual choice. Only ignore the directories for the targets your manifest materializes.
 
 Example repository-root `.gitignore`:
 
 ```gitignore
 # Generated target AI-native configuration
 .claude/
+.agents/
+.codex/
 ```
 
-If a project chooses to manually maintain `.claude/`,
+If a project chooses to manually maintain a target AI-native directory,
 that directory should be treated as ordinary project configuration,
 not as Enozunu-generated output.
 
@@ -40,10 +44,11 @@ not as Enozunu-generated output.
 
 Skill directory materialization uses replace semantics, not merge semantics.
 
-When a Skill source is materialized to:
+When a Skill source is materialized to a target's native Skill path, such as:
 
 ```text
 .claude/skills/<name>/
+.agents/skills/<name>/
 ```
 
 that target directory reflects the source directory after regeneration.
@@ -52,7 +57,7 @@ If a supporting file is removed from the source, it is also removed from the tar
 
 ## Editing Generated Output by Hand
 
-Enozunu does not preserve, detect, merge, or reconcile manual edits inside generated output. A hand edit inside `.claude/` is not source of truth, and it is lost on the next regeneration.
+Enozunu does not preserve, detect, merge, or reconcile manual edits inside generated output. A hand edit inside a generated directory such as `.claude/`, `.agents/`, or `.codex/` is not source of truth, and it is lost on the next regeneration.
 
 If an edit should be durable, use one of these approaches:
 
@@ -72,6 +77,8 @@ Each entry includes information such as:
 - target path
 
 Source-specific fields live under the typed `source` object rather than as top-level fields, so entries stay structurally consistent across source kinds.
+
+The `target AI` is `claude` or `codex`. When one source is materialized to both targets in a run, provenance records one entry per target: the `source` object is identical, and the `target AI` and `target path` differ. The `source` object shape does not depend on the target AI.
 
 For a Git source, the `source` object records:
 

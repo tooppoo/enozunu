@@ -37,3 +37,4 @@ Tag selectors are introduced after revision selectors.
 ## Related
 
 - Issue: [#8](https://github.com/tooppoo/enozunu/issues/8)
+- [The Git exact revision selector ADR](20260712T155345Z_git-exact-revision-selector.md) later adopted exact revision selectors within v0.0.x, ahead of the v0.1.x plan recorded here; reproducibility guarantees remain deferred.

@@ -36,7 +36,8 @@ impl CommitSha {
 /// Which commit of a repository to resolve.
 ///
 /// The two selectors are deliberately distinct types so a caller cannot pass a revision where a branch is expected.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// The type also serves as a resolution and cache key component: a branch whose name looks like a commit id stays distinct from a revision with the same text.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum GitSelector {
     Branch(String),
     Revision(CommitSha),

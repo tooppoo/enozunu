@@ -82,4 +82,7 @@ This makes early dogfooding easier while Skill and agent sources change frequent
 Branch selectors are mutable.
 Therefore v0.0.x does not guarantee exact reproducibility.
 
-At materialization time, Enozunu records the resolved commit in `.enozunu/provenance.json`. That record is provenance, not a lockfile. Exact revision selectors and reproducibility guarantees are future work.
+A Git source may instead pin an exact revision, which materializes the same commit on every run.
+Pinning is per source; it does not freeze a whole run.
+
+At materialization time, Enozunu records the resolved commit in `.enozunu/provenance.json`. That record is provenance, not a lockfile. Whole-run reproducibility guarantees such as lockfiles are future work.

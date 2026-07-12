@@ -84,9 +84,11 @@ For a Git source, the `source` object records:
 
 - `type` (`"git"`)
 - `url`
-- `branch`
+- `selector` (the declared selector: `{"type": "branch" | "revision", "value": ...}`)
 - `path`
 - `resolved_revision`
+
+The `selector` object records what the manifest declared, and `resolved_revision` records the commit that was materialized. For a branch selector the two differ in kind; for a revision selector, `selector.value` equals `resolved_revision`, which records that the pin was honored.
 
 For a local source, the `source` object records:
 
@@ -105,6 +107,6 @@ A Skill Gist materializes the root of the pinned revision, so its `source` objec
 
 A Gist source is recorded as `type: "gist"`, never as `type: "git"`, even though Git transport materializes it. The recorded `revision` equals the pinned Gist revision.
 
-`provenance.json` is not a lockfile. It is not used as a resolution input in v0.0.x.
+`provenance.json` is not a lockfile. It is not used as a resolution input in v0.0.x. Because the record is inspection-only output rather than a read-back contract, its shape may change within v0.0.x without a version bump; the rationale is recorded in [the Git exact revision selector ADR](../design/adr/20260712T155345Z_git-exact-revision-selector.md#compatibility).
 
-Because v0.0.x supports branch selectors, materializing the same manifest at different times may produce different results. The provenance record exists to make the previous result inspectable.
+Because branch selectors are mutable, materializing the same manifest at different times may produce different results for branch-selected sources. Revision-selected Git sources and pinned Gist sources materialize the same commit on every run. The provenance record exists to make the previous result inspectable.

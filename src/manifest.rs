@@ -6,7 +6,7 @@
 use kdl::{KdlDocument, KdlNode};
 
 use crate::diagnostics::{Diagnostic, DiagnosticCode};
-use crate::git::CommitSha;
+use crate::git::{CommitSha, GitSelector};
 
 pub const SUPPORTED_CONFIG_VERSION: i128 = 1;
 
@@ -71,9 +71,10 @@ pub enum GistArtifactSelector {
 /// See docs/guide/manifest.md for the supported source reference policy.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SourceReference {
+    /// The commit is selected by `selector` — a sum type rather than parallel optional `branch` / `revision` fields — so the invalid states "both selectors" and "no selector" cannot reach the resolution layer.
     Git {
         url: String,
-        branch: String,
+        selector: GitSelector,
         path: String,
     },
     Local {
@@ -316,8 +317,8 @@ fn parse_source_reference(
                 "git" => git_blocks.push(block),
                 "local" => local_blocks.push(block),
                 "gist" => gist_blocks.push(block),
-                // `branch` and `path` were top-level fields before source reference blocks existed, so their appearance here most likely means an unmigrated manifest.
-                other @ ("branch" | "path" | "url") => {
+                // `branch` and `path` were top-level fields before source reference blocks existed, so their appearance here most likely means an unmigrated manifest; `revision` is grouped with them because it is also a `git` block field.
+                other @ ("branch" | "revision" | "path" | "url") => {
                     diags.push(Diagnostic::new(
                         DiagnosticCode::UnsupportedSourceReference,
                         format!(
@@ -388,6 +389,7 @@ fn parse_git_reference(
 
     let mut url = None;
     let mut branch = None;
+    let mut revision = None;
     let mut path = None;
     let mut ok = true;
 
@@ -395,22 +397,40 @@ fn parse_git_reference(
         for field in children.nodes() {
             let field_name = field.name().value();
             let value = first_string_arg(field);
-            match (field_name, value) {
-                ("url", Some(v)) => url = Some(v),
-                ("branch", Some(v)) => branch = Some(v),
-                ("path", Some(v)) => path = Some(v),
-                ("url" | "branch" | "path", None) => {
+            // A repeated field is a shape error rather than last-value-wins, so a manifest cannot silently resolve a different commit than the one it appears to declare.
+            let slot = match field_name {
+                "url" => Some(&mut url),
+                "branch" => Some(&mut branch),
+                "revision" => Some(&mut revision),
+                "path" => Some(&mut path),
+                _ => None,
+            };
+            match (slot, value) {
+                (Some(slot), Some(v)) => {
+                    if slot.is_some() {
+                        diags.push(Diagnostic::new(
+                            DiagnosticCode::ManifestShape,
+                            format!(
+                                "`git` block of {kind} `{name}` declares `{field_name}` more than once"
+                            ),
+                        ));
+                        ok = false;
+                    } else {
+                        *slot = Some(v);
+                    }
+                }
+                (Some(_), None) => {
                     diags.push(Diagnostic::new(
                         DiagnosticCode::ManifestShape,
                         format!("`{field_name}` of {kind} `{name}` must have a string value"),
                     ));
                     ok = false;
                 }
-                (other, _) => {
+                (None, _) => {
                     diags.push(Diagnostic::new(
                         DiagnosticCode::UnsupportedSourceReference,
                         format!(
-                            "`git` block of {kind} `{name}` uses unsupported field `{other}`; it accepts only url + branch + path"
+                            "`git` block of {kind} `{name}` uses unsupported field `{field_name}`; it accepts url + path + exactly one of branch, revision"
                         ),
                     ));
                     ok = false;
@@ -419,7 +439,7 @@ fn parse_git_reference(
         }
     }
 
-    for (field, value) in [("url", &url), ("branch", &branch), ("path", &path)] {
+    for (field, value) in [("url", &url), ("path", &path)] {
         if value.is_none() {
             diags.push(Diagnostic::new(
                 DiagnosticCode::ManifestShape,
@@ -429,18 +449,40 @@ fn parse_git_reference(
         }
     }
 
+    match (&branch, &revision) {
+        (None, None) => {
+            diags.push(Diagnostic::new(
+                DiagnosticCode::ManifestShape,
+                format!(
+                    "`git` block of {kind} `{name}` must declare exactly one selector: `branch` or `revision`"
+                ),
+            ));
+            ok = false;
+        }
+        (Some(_), Some(_)) => {
+            diags.push(Diagnostic::new(
+                DiagnosticCode::ManifestShape,
+                format!(
+                    "`git` block of {kind} `{name}` declares both `branch` and `revision`; exactly one selector is allowed"
+                ),
+            ));
+            ok = false;
+        }
+        _ => {}
+    }
+
     if !ok {
         return None;
     }
 
     let url = url.unwrap();
-    let branch = branch.unwrap();
     let path = path.unwrap();
 
     // Manifest values reach the external git command as arguments.
     // A leading `-` would let git parse a value as an option (for example `--upload-pack=<command>`), so such values are rejected as configuration errors.
-    for (field, value) in [("url", &url), ("branch", &branch)] {
-        if value.starts_with('-') {
+    // A validated revision is lowercase hexadecimal, so only `url` and `branch` can carry such a value.
+    for (field, value) in [("url", Some(&url)), ("branch", branch.as_ref())] {
+        if value.is_some_and(|v| v.starts_with('-')) {
             diags.push(Diagnostic::new(
                 DiagnosticCode::ManifestShape,
                 format!(
@@ -450,19 +492,39 @@ fn parse_git_reference(
             return None;
         }
     }
-    if branch.is_empty() {
-        diags.push(Diagnostic::new(
-            DiagnosticCode::ManifestShape,
-            format!("`branch` of {kind} `{name}` must not be empty"),
-        ));
-        return None;
-    }
+
+    let selector = match (branch, revision) {
+        (Some(branch), None) => {
+            if branch.is_empty() {
+                diags.push(Diagnostic::new(
+                    DiagnosticCode::ManifestShape,
+                    format!("`branch` of {kind} `{name}` must not be empty"),
+                ));
+                return None;
+            }
+            GitSelector::Branch(branch)
+        }
+        (None, Some(revision_raw)) => {
+            let Some(revision) = CommitSha::parse(&revision_raw) else {
+                diags.push(Diagnostic::new(
+                    DiagnosticCode::InvalidRevision,
+                    format!(
+                        "`revision` of {kind} `{name}` (`{revision_raw}`) must be exactly 40 lowercase hexadecimal characters"
+                    ),
+                ));
+                return None;
+            };
+            GitSelector::Revision(revision)
+        }
+        // Exactly one selector is present here; the exclusivity check above already returned otherwise.
+        _ => unreachable!("selector exclusivity was validated above"),
+    };
 
     if is_github_tree_blob_shorthand(&url) {
         diags.push(Diagnostic::new(
             DiagnosticCode::UnsupportedSourceReference,
             format!(
-                "{kind} `{name}` uses a GitHub tree/blob URL shorthand; use the normalized url + branch + path form"
+                "{kind} `{name}` uses a GitHub tree/blob URL shorthand; use the normalized url + selector + path form"
             ),
         ));
         return None;
@@ -473,7 +535,11 @@ fn parse_git_reference(
         return None;
     }
 
-    Some(SourceReference::Git { url, branch, path })
+    Some(SourceReference::Git {
+        url,
+        selector,
+        path,
+    })
 }
 
 fn parse_local_reference(
@@ -910,7 +976,7 @@ enozunu config-version=1 {
             manifest.provider.skills[0].reference,
             SourceReference::Git {
                 url: "https://github.com/tooppoo/reportage".to_owned(),
-                branch: "main".to_owned(),
+                selector: GitSelector::Branch("main".to_owned()),
                 path: ".claude/skills/git-kura".to_owned(),
             }
         );
@@ -1093,6 +1159,7 @@ enozunu config-version=1 {
 
     #[test]
     fn rejects_missing_git_reference_fields() {
+        // A url-only block is missing `path` and a selector, so both are reported in one run.
         let text = r#"
 enozunu config-version=1 {
   provider {
@@ -1111,6 +1178,131 @@ enozunu config-version=1 {
                 .count(),
             2
         );
+    }
+
+    /// Wraps a `git { ... }` block body in a skill declaration, without selecting it, so tests exercise git block parsing in isolation.
+    fn skill_git(git_body: &str) -> String {
+        format!(
+            r#"
+enozunu config-version=1 {{
+  provider {{
+    skills {{
+      skill "example" {{
+        git {{
+{git_body}
+        }}
+      }}
+    }}
+  }}
+  consumer {{ claude {{}} }}
+}}
+"#
+        )
+    }
+
+    #[test]
+    fn parses_a_git_source_with_a_revision_selector() {
+        let text = skill_git(
+            r#"          url "https://example.com/r"
+          revision "468aac8caed5f0c3b859b8286968e2c78e2b8760"
+          path "s/example""#,
+        );
+        let manifest = parse(&text).unwrap();
+        assert_eq!(
+            manifest.provider.skills[0].reference,
+            SourceReference::Git {
+                url: "https://example.com/r".to_owned(),
+                selector: GitSelector::Revision(
+                    CommitSha::parse("468aac8caed5f0c3b859b8286968e2c78e2b8760").unwrap()
+                ),
+                path: "s/example".to_owned(),
+            }
+        );
+    }
+
+    #[test]
+    fn rejects_a_git_source_with_both_branch_and_revision() {
+        let text = skill_git(
+            r#"          url "https://example.com/r"
+          branch "main"
+          revision "468aac8caed5f0c3b859b8286968e2c78e2b8760"
+          path "s/example""#,
+        );
+        assert!(codes(parse(&text)).contains(&DiagnosticCode::ManifestShape));
+    }
+
+    #[test]
+    fn rejects_a_git_source_without_a_selector() {
+        let text = skill_git(
+            r#"          url "https://example.com/r"
+          path "s/example""#,
+        );
+        assert!(codes(parse(&text)).contains(&DiagnosticCode::ManifestShape));
+    }
+
+    #[test]
+    fn rejects_duplicate_git_fields() {
+        for (field, duplicate) in [
+            ("url", r#"url "https://example.com/other""#),
+            ("branch", r#"branch "develop""#),
+            ("path", r#"path "s/other""#),
+        ] {
+            let text = skill_git(&format!(
+                r#"          url "https://example.com/r"
+          branch "main"
+          path "s/example"
+          {duplicate}"#
+            ));
+            assert!(
+                codes(parse(&text)).contains(&DiagnosticCode::ManifestShape),
+                "duplicate `{field}` must be rejected"
+            );
+        }
+
+        // A duplicate `revision` is checked with a revision selector so the duplication is the only error.
+        let text = skill_git(
+            r#"          url "https://example.com/r"
+          revision "468aac8caed5f0c3b859b8286968e2c78e2b8760"
+          revision "468aac8caed5f0c3b859b8286968e2c78e2b8760"
+          path "s/example""#,
+        );
+        assert!(codes(parse(&text)).contains(&DiagnosticCode::ManifestShape));
+    }
+
+    #[test]
+    fn rejects_non_canonical_git_revisions() {
+        for revision in [
+            "468aac8",                                   // abbreviated
+            "468AAC8CAED5F0C3B859B8286968E2C78E2B8760",  // uppercase
+            " 468aac8caed5f0c3b859b8286968e2c78e2b876",  // whitespace-padded
+            "468aac8caed5f0c3b859b8286968e2c78e2b8760a", // too long
+            // 64-char SHA-256 object id
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+            "v1.0.0", // tag
+            "HEAD",   // symbolic ref
+            "main~3", // relative revspec
+        ] {
+            let text = skill_git(&format!(
+                r#"          url "https://example.com/r"
+          revision "{revision}"
+          path "s/example""#
+            ));
+            assert!(
+                codes(parse(&text)).contains(&DiagnosticCode::InvalidRevision),
+                "revision `{revision}` must be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_unknown_field_inside_a_git_block() {
+        let text = skill_git(
+            r#"          url "https://example.com/r"
+          branch "main"
+          path "s/example"
+          tag "v1.0.0""#,
+        );
+        assert!(codes(parse(&text)).contains(&DiagnosticCode::UnsupportedSourceReference));
     }
 
     #[test]

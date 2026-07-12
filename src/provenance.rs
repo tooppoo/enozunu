@@ -28,8 +28,19 @@ pub struct ProvenanceEntry {
     pub target_path: String,
 }
 
+/// The declared Git selector, recorded as one tagged shape for both branch and revision sources.
+///
+/// A single `selector` object rather than independent optional `branch` / `revision` fields keeps the record aligned with the manifest contract: exactly one selector exists, so consumers dispatch on `type` instead of probing which field is present.
+#[derive(Debug, Serialize)]
+#[serde(tag = "type", content = "value", rename_all = "lowercase")]
+pub enum ProvenanceGitSelector {
+    Branch(String),
+    Revision(String),
+}
+
 /// Source-kind-specific provenance fields, tagged so consumers can dispatch on `type` instead of probing for Git-only fields.
 ///
+/// A Git source records both the declared `selector` and the materialized `resolved_revision`; for a revision selector the two carry the same commit id, which records that the pin was honored.
 /// A Gist source records `type: "gist"` with its id and pinned revision; it is never represented as `type: "git"` even though Git transport materialized it.
 /// `file` is present only for agent Gists, which select one file; a Skill Gist materializes the revision root and records no `file` key.
 #[derive(Debug, Serialize)]
@@ -37,7 +48,7 @@ pub struct ProvenanceEntry {
 pub enum ProvenanceSource {
     Git {
         url: String,
-        branch: String,
+        selector: ProvenanceGitSelector,
         path: String,
         resolved_revision: String,
     },
@@ -90,7 +101,7 @@ mod tests {
                     kind: "skill".to_owned(),
                     source: ProvenanceSource::Git {
                         url: "https://example.com/repo".to_owned(),
-                        branch: "main".to_owned(),
+                        selector: ProvenanceGitSelector::Branch("main".to_owned()),
                         path: "skills/demo".to_owned(),
                         resolved_revision: "abc123".to_owned(),
                     },
@@ -124,6 +135,10 @@ mod tests {
         let record: serde_json::Value = serde_json::from_str(&written).unwrap();
         let entries = record["entries"].as_array().unwrap();
         assert_eq!(entries[0]["source"]["type"], "git");
+        // The declared selector is one tagged object, not parallel optional `branch` / `revision` fields.
+        assert_eq!(entries[0]["source"]["selector"]["type"], "branch");
+        assert_eq!(entries[0]["source"]["selector"]["value"], "main");
+        assert!(entries[0]["source"].get("branch").is_none());
         assert_eq!(entries[0]["source"]["resolved_revision"], "abc123");
         assert!(entries[0].get("resolved_revision").is_none());
         assert_eq!(entries[1]["source"]["type"], "local");

@@ -7,7 +7,7 @@ It centralizes human-authored definitions of AI-agent configuration sources and 
 ## Quick Start
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/tooppoo/reportage/refs/heads/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/tooppoo/enozunu/refs/heads/main/install.sh | sh
 ```
 
 ## Status

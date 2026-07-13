@@ -8,3 +8,7 @@
 - When updating documentation, always use the `documentation-writing` skill.
 - When writing or modifying code comments, always use both the `documentation-writing` skill and the `code-comment` skill.
 - When implments e2e test, always use `reportage` skill to write test script.
+
+## Pull Request
+
+- Use `.github/pull_request_template.md` as template.

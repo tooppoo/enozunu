@@ -451,6 +451,7 @@ fn io_diag(e: std::io::Error) -> Diagnostic {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::git::GitSelector;
     use crate::manifest::{SourceReference, TargetAi};
 
     fn target_rel_path(kind: ArtifactKind) -> String {
@@ -466,7 +467,7 @@ mod tests {
             kind,
             reference: SourceReference::Git {
                 url: "https://example.com/repo".to_owned(),
-                branch: "main".to_owned(),
+                selector: GitSelector::Branch("main".to_owned()),
                 path: path.to_owned(),
             },
             target_ai: TargetAi::Claude,

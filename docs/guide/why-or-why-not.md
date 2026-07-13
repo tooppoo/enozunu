@@ -43,7 +43,6 @@ v0.0.x is not a good fit if you need:
 
 - Codex target materialization
 - `.agents/` materialization
-- exact revision selectors
 - lockfile-based reproducibility
 - tag selectors
 - version ranges
@@ -61,7 +60,7 @@ but they are not part of the v0.0.x goal.
 v0.0.x is a good fit if you accept these constraints:
 
 - Claude is the only target AI
-- `git` + `branch` + `path` is the only supported source reference shape
+- a `git` source selects its commit with exactly one selector: a branch or an exact revision
 - GitHub tree/blob URL shorthand is not supported
 - Skill sources must be directories containing `SKILL.md`
 - agent sources are files materialized into `.claude/agents/<name>.md`

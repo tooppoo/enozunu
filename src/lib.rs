@@ -19,7 +19,7 @@ use gist::{GistRequest, GistResolver, GitTransportGistResolver};
 use git::{GitError, GitResolutionRequest, GitResolver, GitSelector, ResolvedSource};
 use manifest::{GistArtifactSelector, SourceReference, TargetAi};
 use plan::PlannedMaterialization;
-use provenance::{ProvenanceEntry, ProvenanceRecord, ProvenanceSource};
+use provenance::{ProvenanceEntry, ProvenanceGitSelector, ProvenanceRecord, ProvenanceSource};
 
 pub const MANIFEST_FILE_NAME: &str = "enozunu.kdl";
 pub const PROVENANCE_VERSION: u32 = 1;
@@ -100,8 +100,8 @@ pub fn run_materialize(
     let mut diags = Vec::new();
     for entry in &planned {
         let source_base = match &entry.reference {
-            SourceReference::Git { url, branch, .. } => {
-                &resolved[&(url.clone(), branch.clone())].content_root
+            SourceReference::Git { url, selector, .. } => {
+                &resolved[&(url.clone(), selector.clone())].content_root
             }
             SourceReference::Local { .. } => manifest_dir,
             SourceReference::Gist { id, revision, .. } => {
@@ -111,8 +111,8 @@ pub fn run_materialize(
         match materialize::check(entry, source_base, project_root, &target_rel_paths) {
             Ok(c) => {
                 let origin = match &entry.reference {
-                    SourceReference::Git { url, branch, .. } => ResolvedOrigin::Git {
-                        revision: resolved[&(url.clone(), branch.clone())].commit.clone(),
+                    SourceReference::Git { url, selector, .. } => ResolvedOrigin::Git {
+                        revision: resolved[&(url.clone(), selector.clone())].commit.clone(),
                     },
                     SourceReference::Local { .. } => ResolvedOrigin::Local {
                         resolved_path: c.source_abs.display().to_string(),
@@ -165,14 +165,24 @@ pub fn run_materialize(
 
 fn provenance_source(reference: &SourceReference, origin: &ResolvedOrigin) -> ProvenanceSource {
     match (reference, origin) {
-        (SourceReference::Git { url, branch, path }, ResolvedOrigin::Git { revision }) => {
-            ProvenanceSource::Git {
-                url: url.clone(),
-                branch: branch.clone(),
-                path: path.clone(),
-                resolved_revision: revision.clone(),
-            }
-        }
+        (
+            SourceReference::Git {
+                url,
+                selector,
+                path,
+            },
+            ResolvedOrigin::Git { revision },
+        ) => ProvenanceSource::Git {
+            url: url.clone(),
+            selector: match selector {
+                GitSelector::Branch(branch) => ProvenanceGitSelector::Branch(branch.clone()),
+                GitSelector::Revision(sha) => {
+                    ProvenanceGitSelector::Revision(sha.as_str().to_owned())
+                }
+            },
+            path: path.clone(),
+            resolved_revision: revision.clone(),
+        },
         (SourceReference::Local { path }, ResolvedOrigin::Local { resolved_path }) => {
             ProvenanceSource::Local {
                 path: path.clone(),
@@ -203,26 +213,27 @@ fn gist_key(id: &manifest::GistId, revision: &git::CommitSha) -> (String, String
     (id.as_str().to_owned(), revision.as_str().to_owned())
 }
 
-/// Resolves each distinct Git (url, branch) pair once so a single run sees one consistent commit per branch.
+/// Resolves each distinct Git (url, selector) pair once so a single run sees one consistent commit per selector.
 ///
+/// The selector — kind and value — is part of the key, so a branch whose name looks like a commit id never shares a resolution with a revision of the same text.
 /// Local and Gist references are skipped here: local paths are checked directly against the filesystem, and Gist sources resolve through the Gist boundary.
 fn resolve_git_sources(
     planned: &[PlannedMaterialization],
     resolver: &dyn GitResolver,
-) -> Result<HashMap<(String, String), ResolvedSource>, Vec<Diagnostic>> {
+) -> Result<HashMap<(String, GitSelector), ResolvedSource>, Vec<Diagnostic>> {
     let mut resolved = HashMap::new();
     let mut diags = Vec::new();
     for entry in planned {
-        let SourceReference::Git { url, branch, .. } = &entry.reference else {
+        let SourceReference::Git { url, selector, .. } = &entry.reference else {
             continue;
         };
-        let key = (url.clone(), branch.clone());
+        let key = (url.clone(), selector.clone());
         if resolved.contains_key(&key) {
             continue;
         }
         let request = GitResolutionRequest {
             url: url.clone(),
-            selector: GitSelector::Branch(branch.clone()),
+            selector: selector.clone(),
         };
         match resolver.resolve(&request) {
             Ok(source) => {
@@ -240,7 +251,7 @@ fn resolve_git_sources(
 
 /// Maps a Git-source transport failure to a diagnostic.
 ///
-/// For a Git source, both a fetch failure and an unresolved branch are `GitResolution`; only a local filesystem failure is `Io`. Gist sources use their own mapping so their transport failures are not reported as `GitResolution`.
+/// For a Git source, a fetch failure and an unresolved branch or revision are all `GitResolution`; only a local filesystem failure is `Io`. Gist sources use their own mapping so their transport failures are not reported as `GitResolution`.
 fn git_error_diagnostic(error: GitError) -> Diagnostic {
     match error {
         GitError::Fetch(message) | GitError::RevisionNotFound(message) => {

@@ -111,6 +111,10 @@ The rationale for the block structure is recorded in [the source reference block
 
 ### Git Source Reference
 
+A `git` block selects its commit with exactly one selector: a mutable `branch` or an exact `revision`.
+
+Branch selector:
+
 ```kdl
 git {
   url "https://github.com/example/repo"
@@ -119,20 +123,43 @@ git {
 }
 ```
 
+Exact revision selector:
+
+```kdl
+git {
+  url "https://github.com/example/repo"
+  revision "468aac8caed5f0c3b859b8286968e2c78e2b8760"
+  path ".claude/skills/example"
+}
+```
+
 Required fields:
 
 ```text
-url
-branch
-path
+url + exactly one of (branch, revision) + path
 ```
 
 Semantics:
 
 - `url` is the Git repository URL.
-- `branch` is the branch to resolve.
+- `branch` resolves the current head of the branch on each run.
+- `revision` pins one exact Git commit.
 - `path` is the artifact path inside the resolved Git checkout.
 - `path` must be relative and must not contain empty or `..` segments.
+
+Declaring both `branch` and `revision`, or neither, is rejected. Declaring any `git` field more than once is also rejected: repeated fields are a manifest error, not last-value-wins.
+
+`revision` must be a canonical full SHA-1 commit id, exactly 40 lowercase ASCII hexadecimal characters:
+
+```regex
+^[0-9a-f]{40}$
+```
+
+`revision` identifies one exact commit; it is not an arbitrary Git revspec. Abbreviated, uppercase, and whitespace-padded object ids are rejected, as are tags, `HEAD`, relative expressions such as `main~3`, and SHA-256 object ids. After checkout, the resolver verifies that the resolved `HEAD` exactly equals the requested revision.
+
+The SHA-1 restriction reflects the v0.0.x source-host scope: GitHub uses SHA-1 object ids for the supported workflow, and SHA-256 repositories are not supported. The object-id contract will be reconsidered when support expands to other Git hosting systems or repository formats, including GitLab. The selector and object-id decisions are recorded in [the Git exact revision selector ADR](../design/adr/20260712T155345Z_git-exact-revision-selector.md).
+
+Each distinct `(url, selector kind, selector value)` combination is resolved once per run. The selector kind is part of that identity, so a branch whose name looks like a commit id never collides with an exact revision of the same text.
 
 ### Local Source Reference
 
@@ -323,10 +350,11 @@ The following are not supported in v0.0.x:
 ```text
 consumer targets other than claude and codex
 GitHub tree/blob URL shorthand
-Git revision selector
 Git tag selector
 Git latest selector
 Git version range
+Git symbolic or relative revspecs
+SHA-256 repositories
 absolute local paths
 Gist branch, tag, or abbreviated revision selectors
 nested Skill root selection inside a Gist
@@ -334,12 +362,10 @@ nested Skill root selection inside a Gist
 
 Codex support is limited to Skill and custom agent materialization. `AGENTS.md`, `.codex/config.toml`, and Codex rules, MCP, hooks, and plugins are out of scope.
 
-An exact revision is supported only for Gist sources, through the dedicated `gist` block, not for Git source references.
-
 For v0.0.x, Git source references must use the normalized form:
 
 ```text
-git { url + branch + path }
+git { url + exactly one of (branch, revision) + path }
 ```
 
 ## Validation Rules
@@ -351,6 +377,10 @@ v0.0.x should reject:
 - `use-agents` references that do not exist under `provider.agents`
 - source declarations without exactly one source reference block
 - unsupported source reference blocks
+- `git` blocks without exactly one of `branch` and `revision`
+- duplicate `git` fields
+- unknown `git` fields
+- `git` `revision` values that are not canonical full SHA-1 commit ids
 - Skill sources that do not contain `SKILL.md`
 - source paths that cannot be resolved
 - GitHub tree/blob URL shorthand
@@ -379,6 +409,14 @@ enozunu config-version=1 {
         git {
           url "https://github.com/tooppoo/reportage"
           branch "main"
+          path ".claude/skills/git-kura"
+        }
+      }
+
+      skill "pinned-git-kura" {
+        git {
+          url "https://github.com/tooppoo/reportage"
+          revision "468aac8caed5f0c3b859b8286968e2c78e2b8760"
           path ".claude/skills/git-kura"
         }
       }
@@ -426,7 +464,7 @@ enozunu config-version=1 {
 
   consumer {
     claude {
-      use-skills "git-kura" "local-git-kura" "semantic-line-breaks"
+      use-skills "git-kura" "pinned-git-kura" "local-git-kura" "semantic-line-breaks"
       use-agents "shell-script-reviewer" "gist-reviewer"
     }
 

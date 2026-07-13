@@ -414,7 +414,10 @@ fn records_provenance_with_resolved_revision() {
     for entry in entries {
         assert_eq!(entry["source"]["type"], "git");
         assert_eq!(entry["source"]["resolved_revision"], head.as_str());
-        assert_eq!(entry["source"]["branch"], "main");
+        // The declared selector is recorded as one tagged object, not as a `branch` field.
+        assert_eq!(entry["source"]["selector"]["type"], "branch");
+        assert_eq!(entry["source"]["selector"]["value"], "main");
+        assert!(entry["source"].get("branch").is_none());
         assert_eq!(entry["target_ai"], "claude");
     }
     assert_eq!(entries[0]["kind"], "skill");
@@ -944,6 +947,223 @@ fn follows_branch_updates_across_runs() {
 
     let agent = fs::read_to_string(project.root.join(".claude/agents/demo-agent.md")).unwrap();
     assert_eq!(agent, "# demo agent v2\n");
+}
+
+#[test]
+fn materializes_a_git_source_pinned_to_an_exact_revision() {
+    let project = setup();
+    let pinned = rev_parse(&project.source_repo, "main");
+    // Advance the branch so the pinned revision is no longer the branch tip.
+    fs::write(
+        project.source_repo.join("agents/demo-agent.md"),
+        "# demo agent v2\n",
+    )
+    .unwrap();
+    commit_all(&project.source_repo, "advance past the pinned revision");
+
+    let url = format!("file://{}", project.source_repo.display());
+    let manifest = format!(
+        r#"
+enozunu config-version=1 {{
+  provider {{
+    agents {{
+      agent "demo-agent" {{
+        git {{
+          url "{url}"
+          revision "{pinned}"
+          path "agents/demo-agent.md"
+        }}
+      }}
+    }}
+  }}
+  consumer {{
+    claude {{
+      use-agents "demo-agent"
+    }}
+  }}
+}}
+"#
+    );
+    fs::write(project.root.join("enozunu.kdl"), manifest).unwrap();
+
+    materialize(&project).unwrap();
+
+    // The pinned revision is materialized, not the advanced branch tip.
+    let agent = fs::read_to_string(project.root.join(".claude/agents/demo-agent.md")).unwrap();
+    assert_eq!(agent, "# demo agent\n");
+
+    // Provenance records the declared revision selector and the identical resolved revision.
+    let text = fs::read_to_string(project.root.join(".enozunu/provenance.json")).unwrap();
+    let record: serde_json::Value = serde_json::from_str(&text).unwrap();
+    let entries = record["entries"].as_array().unwrap();
+    assert_eq!(record["version"], 1);
+    assert_eq!(entries[0]["source"]["type"], "git");
+    assert_eq!(entries[0]["source"]["selector"]["type"], "revision");
+    assert_eq!(entries[0]["source"]["selector"]["value"], pinned.as_str());
+    assert_eq!(entries[0]["source"]["resolved_revision"], pinned.as_str());
+}
+
+#[test]
+fn branch_and_revision_selectors_with_identical_text_do_not_collide() {
+    let project = setup();
+    let pinned = rev_parse(&project.source_repo, "main");
+    // A branch literally named after the pinned commit id, carrying different content: if the selector kind were absent from resolution or cache keys, the two sources below would share one checkout.
+    git(
+        &project.source_repo,
+        &["checkout", "--quiet", "-b", &pinned],
+    );
+    fs::write(
+        project.source_repo.join("agents/demo-agent.md"),
+        "# demo agent on the sha-named branch\n",
+    )
+    .unwrap();
+    commit_all(&project.source_repo, "diverge on the sha-named branch");
+    git(&project.source_repo, &["checkout", "--quiet", "main"]);
+
+    let url = format!("file://{}", project.source_repo.display());
+    let manifest = format!(
+        r#"
+enozunu config-version=1 {{
+  provider {{
+    agents {{
+      agent "by-branch" {{
+        git {{
+          url "{url}"
+          branch "{pinned}"
+          path "agents/demo-agent.md"
+        }}
+      }}
+      agent "by-revision" {{
+        git {{
+          url "{url}"
+          revision "{pinned}"
+          path "agents/demo-agent.md"
+        }}
+      }}
+    }}
+  }}
+  consumer {{
+    claude {{
+      use-agents "by-branch" "by-revision"
+    }}
+  }}
+}}
+"#
+    );
+    fs::write(project.root.join("enozunu.kdl"), manifest).unwrap();
+
+    materialize(&project).unwrap();
+
+    let by_branch = fs::read_to_string(project.root.join(".claude/agents/by-branch.md")).unwrap();
+    let by_revision =
+        fs::read_to_string(project.root.join(".claude/agents/by-revision.md")).unwrap();
+    assert_eq!(by_branch, "# demo agent on the sha-named branch\n");
+    assert_eq!(by_revision, "# demo agent\n");
+}
+
+#[test]
+fn resolves_identical_revision_sources_once() {
+    // A resolver that records every request, so two sources pinning the same (url, revision) are proven to resolve once.
+    struct CountingResolver {
+        inner: CommandGitResolver,
+        requests: std::cell::RefCell<Vec<GitResolutionRequest>>,
+    }
+    impl GitResolver for CountingResolver {
+        fn resolve(
+            &self,
+            request: &GitResolutionRequest,
+        ) -> Result<enozunu::git::ResolvedSource, enozunu::git::GitError> {
+            self.requests.borrow_mut().push(request.clone());
+            self.inner.resolve(request)
+        }
+    }
+
+    let project = setup();
+    let pinned = rev_parse(&project.source_repo, "main");
+    let url = format!("file://{}", project.source_repo.display());
+    let manifest = format!(
+        r#"
+enozunu config-version=1 {{
+  provider {{
+    skills {{
+      skill "demo-skill" {{
+        git {{
+          url "{url}"
+          revision "{pinned}"
+          path "skills/demo-skill"
+        }}
+      }}
+    }}
+    agents {{
+      agent "demo-agent" {{
+        git {{
+          url "{url}"
+          revision "{pinned}"
+          path "agents/demo-agent.md"
+        }}
+      }}
+    }}
+  }}
+  consumer {{
+    claude {{
+      use-skills "demo-skill"
+      use-agents "demo-agent"
+    }}
+  }}
+}}
+"#
+    );
+    fs::write(project.root.join("enozunu.kdl"), manifest).unwrap();
+
+    let resolver = CountingResolver {
+        inner: CommandGitResolver::new(project.root.join(".enozunu/cache")),
+        requests: std::cell::RefCell::new(Vec::new()),
+    };
+    enozunu::run_materialize(&project.root.join("enozunu.kdl"), &project.root, &resolver).unwrap();
+
+    assert_eq!(resolver.requests.borrow().len(), 1);
+    assert_eq!(
+        resolver.requests.borrow()[0].selector,
+        GitSelector::Revision(CommitSha::parse(&pinned).unwrap())
+    );
+}
+
+#[test]
+fn rejects_a_missing_revision_with_git_resolution_diagnostic() {
+    let project = setup();
+    let url = format!("file://{}", project.source_repo.display());
+    // A well-formed commit id that does not exist in the repository.
+    let manifest = format!(
+        r#"
+enozunu config-version=1 {{
+  provider {{
+    agents {{
+      agent "demo-agent" {{
+        git {{
+          url "{url}"
+          revision "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
+          path "agents/demo-agent.md"
+        }}
+      }}
+    }}
+  }}
+  consumer {{
+    claude {{
+      use-agents "demo-agent"
+    }}
+  }}
+}}
+"#
+    );
+    fs::write(project.root.join("enozunu.kdl"), manifest).unwrap();
+
+    let diags = materialize(&project).unwrap_err();
+    assert!(
+        diags
+            .iter()
+            .any(|d| d.code == DiagnosticCode::GitResolution)
+    );
+    assert!(!project.root.join(".claude").exists());
 }
 
 // Resolver/export boundary tests: the production resolver must hand materialization a content tree equal to the clean working tree, minus Git metadata.

@@ -13,9 +13,19 @@
 #
 # Every case gives the branch tip different content from the commit the case
 # actually selects, so a case cannot pass by accidentally resolving HEAD.
+#
+# A failing `$` step does not end a case, so a broken fixture is silent unless
+# something asserts against it. The happy-path cases catch that through their
+# content assertions; the two failure cases cannot, because `git-resolution`
+# covers an unreachable repository just as much as an absent selector, so they
+# assert a positive control on the fixture before running the failing command.
+#
+# Repository-creating steps run with `GIT_CONFIG_GLOBAL=/dev/null
+# GIT_CONFIG_NOSYSTEM=1` so ambient developer configuration — commit signing
+# above all — cannot make the fixture fail to build outside CI.
 
 case "summon follows the branch head for a branch selector" {
-  $ git init --quiet --initial-branch main source-repo
+  $ GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 git init --quiet --initial-branch main source-repo
   $ git -C source-repo config user.email "e2e@example.com"
   $ git -C source-repo config user.name "e2e"
   write <"source-repo/skills/demo-skill/SKILL.md"> ```
@@ -27,10 +37,10 @@ case "summon follows the branch head for a branch selector" {
     # Demo Skill OLD
     ```
   $ git -C source-repo add --all
-  $ git -C source-repo commit --quiet -m old
+  $ GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 git -C source-repo commit --quiet -m old
   # Advance the branch so the head differs from the first commit.
   $ sed -i 's/Demo Skill OLD/Demo Skill NEW/' source-repo/skills/demo-skill/SKILL.md
-  $ git -C source-repo commit --quiet -am new
+  $ GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 git -C source-repo commit --quiet -am new
   write <"enozunu.kdl"> ```
     enozunu config-version=1 {
       provider {
@@ -67,7 +77,7 @@ case "summon follows the branch head for a branch selector" {
 }
 
 case "summon materializes the pinned revision, not the branch tip" {
-  $ git init --quiet --initial-branch main source-repo
+  $ GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 git init --quiet --initial-branch main source-repo
   $ git -C source-repo config user.email "e2e@example.com"
   $ git -C source-repo config user.name "e2e"
   write <"source-repo/skills/demo-skill/SKILL.md"> ```
@@ -79,9 +89,9 @@ case "summon materializes the pinned revision, not the branch tip" {
     # Demo Skill OLD
     ```
   $ git -C source-repo add --all
-  $ git -C source-repo commit --quiet -m old
+  $ GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 git -C source-repo commit --quiet -m old
   $ sed -i 's/Demo Skill OLD/Demo Skill NEW/' source-repo/skills/demo-skill/SKILL.md
-  $ git -C source-repo commit --quiet -am new
+  $ GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 git -C source-repo commit --quiet -am new
   write <"enozunu.kdl"> ```
     enozunu config-version=1 {
       provider {
@@ -117,7 +127,7 @@ case "summon materializes the pinned revision, not the branch tip" {
 }
 
 case "summon materializes the commit an annotated tag points at, not the branch tip" {
-  $ git init --quiet --initial-branch main source-repo
+  $ GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 git init --quiet --initial-branch main source-repo
   $ git -C source-repo config user.email "e2e@example.com"
   $ git -C source-repo config user.name "e2e"
   write <"source-repo/skills/demo-skill/SKILL.md"> ```
@@ -129,12 +139,12 @@ case "summon materializes the commit an annotated tag points at, not the branch 
     # Demo Skill OLD
     ```
   $ git -C source-repo add --all
-  $ git -C source-repo commit --quiet -m old
+  $ GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 git -C source-repo commit --quiet -m old
   $ sed -i 's/Demo Skill OLD/Demo Skill NEW/' source-repo/skills/demo-skill/SKILL.md
-  $ git -C source-repo commit --quiet -am new
+  $ GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 git -C source-repo commit --quiet -am new
   # Tag the older commit. An annotated tag is its own object, so resolution must
   # peel it to a commit rather than record the tag object id.
-  $ git -C source-repo tag --annotate --message "release 1.0.0" v1.0.0 HEAD~1
+  $ GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 git -C source-repo tag --annotate --message "release 1.0.0" v1.0.0 HEAD~1
   # Guard: if the tag object and its commit shared an id, the peeling assertion
   # at the end of this case would hold trivially.
   $ test "$(git -C source-repo rev-parse v1.0.0)" != "$(git -C source-repo rev-parse v1.0.0^{commit})"
@@ -181,7 +191,7 @@ case "summon materializes the commit an annotated tag points at, not the branch 
 }
 
 case "summon reports a tag that does not exist" {
-  $ git init --quiet --initial-branch main source-repo
+  $ GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 git init --quiet --initial-branch main source-repo
   $ git -C source-repo config user.email "e2e@example.com"
   $ git -C source-repo config user.name "e2e"
   write <"source-repo/skills/demo-skill/SKILL.md"> ```
@@ -193,7 +203,7 @@ case "summon reports a tag that does not exist" {
     # Demo Skill
     ```
   $ git -C source-repo add --all
-  $ git -C source-repo commit --quiet -m only
+  $ GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 git -C source-repo commit --quiet -m only
   write <"enozunu.kdl"> ```
     enozunu config-version=1 {
       provider {
@@ -215,11 +225,18 @@ case "summon reports a tag that does not exist" {
     }
     ```
   $ sed -i "s|SOURCE_URL|file://$PWD/source-repo|" enozunu.kdl
+  # Positive control: `git-resolution` covers both an unreachable repository and
+  # a reachable one whose selector is absent, so without this the case would
+  # pass even if the fixture above had never been built.
+  $ git -C source-repo rev-parse HEAD
+  assert {
+    exit 0
+  }
   $ enozunu summon
   assert {
     exit 1
-    # Classification is by diagnostic code, not message text: the repository was
-    # reachable but the selector did not resolve.
+    # Classification is by diagnostic code, not message text: the failure is a
+    # resolution-phase failure rather than a manifest error.
     stderr contains "git-resolution"
     not {
       dir <".claude"> exists
@@ -228,7 +245,7 @@ case "summon reports a tag that does not exist" {
 }
 
 case "summon reports a revision that does not exist" {
-  $ git init --quiet --initial-branch main source-repo
+  $ GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 git init --quiet --initial-branch main source-repo
   $ git -C source-repo config user.email "e2e@example.com"
   $ git -C source-repo config user.name "e2e"
   write <"source-repo/skills/demo-skill/SKILL.md"> ```
@@ -240,7 +257,7 @@ case "summon reports a revision that does not exist" {
     # Demo Skill
     ```
   $ git -C source-repo add --all
-  $ git -C source-repo commit --quiet -m only
+  $ GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 git -C source-repo commit --quiet -m only
   write <"enozunu.kdl"> ```
     enozunu config-version=1 {
       provider {
@@ -262,11 +279,17 @@ case "summon reports a revision that does not exist" {
     }
     ```
   $ sed -i "s|SOURCE_URL|file://$PWD/source-repo|" enozunu.kdl
+  # Positive control, as in the tag case above: proves the fixture repository
+  # exists, which the `git-resolution` assertion below cannot distinguish.
+  $ git -C source-repo rev-parse HEAD
+  assert {
+    exit 0
+  }
   $ enozunu summon
   assert {
     exit 1
-    # A well-formed commit id absent from the fetched repository reaches the
-    # resolver, so it is a git-resolution failure rather than a manifest error.
+    # A well-formed commit id passes manifest validation, so the failure surfaces
+    # from the resolver rather than as a manifest error.
     stderr contains "git-resolution"
     not {
       dir <".claude"> exists

@@ -1062,6 +1062,216 @@ enozunu config-version=1 {{
 }
 
 #[test]
+fn materializes_a_git_source_selected_by_tag() {
+    let project = setup();
+    let tagged = rev_parse(&project.source_repo, "main");
+    git(&project.source_repo, &["tag", "v1.0.0"]);
+    // Advance the branch so the tag is no longer the branch tip; following the branch would materialize different content.
+    fs::write(
+        project.source_repo.join("agents/demo-agent.md"),
+        "# demo agent v2\n",
+    )
+    .unwrap();
+    commit_all(&project.source_repo, "advance past the tag");
+
+    let url = format!("file://{}", project.source_repo.display());
+    let manifest = format!(
+        r#"
+enozunu config-version=1 {{
+  provider {{
+    agents {{
+      agent "demo-agent" {{
+        git {{
+          url "{url}"
+          tag "v1.0.0"
+          path "agents/demo-agent.md"
+        }}
+      }}
+    }}
+  }}
+  consumer {{
+    claude {{
+      use-agents "demo-agent"
+    }}
+  }}
+}}
+"#
+    );
+    fs::write(project.root.join("enozunu.kdl"), manifest).unwrap();
+
+    materialize(&project).unwrap();
+
+    let agent = fs::read_to_string(project.root.join(".claude/agents/demo-agent.md")).unwrap();
+    assert_eq!(agent, "# demo agent\n");
+
+    // Provenance records the declared tag and the commit it resolved to, which is the only record of where a mutable tag pointed during this run.
+    let text = fs::read_to_string(project.root.join(".enozunu/provenance.json")).unwrap();
+    let record: serde_json::Value = serde_json::from_str(&text).unwrap();
+    let entries = record["entries"].as_array().unwrap();
+    assert_eq!(record["version"], 1);
+    assert_eq!(entries[0]["source"]["type"], "git");
+    assert_eq!(entries[0]["source"]["selector"]["type"], "tag");
+    assert_eq!(entries[0]["source"]["selector"]["value"], "v1.0.0");
+    assert_eq!(entries[0]["source"]["resolved_revision"], tagged.as_str());
+}
+
+#[test]
+fn resolves_an_annotated_tag_to_its_commit() {
+    let project = setup();
+    let tagged = rev_parse(&project.source_repo, "main");
+    // An annotated tag is its own object; resolution must report the commit it points at, not the tag object id.
+    git(
+        &project.source_repo,
+        &["tag", "--annotate", "v2.0.0", "-m", "release v2.0.0"],
+    );
+    assert_ne!(
+        rev_parse(&project.source_repo, "v2.0.0"),
+        tagged,
+        "the annotated tag must be a distinct object for this test to mean anything"
+    );
+
+    let resolver = CommandGitResolver::new(project.root.join(".enozunu/cache"));
+    let resolved = resolver
+        .resolve(&GitResolutionRequest {
+            url: format!("file://{}", project.source_repo.display()),
+            selector: GitSelector::Tag("v2.0.0".to_owned()),
+        })
+        .unwrap();
+
+    assert_eq!(resolved.commit, tagged);
+    assert_eq!(
+        fs::read_to_string(resolved.content_root.join("agents/demo-agent.md")).unwrap(),
+        "# demo agent\n"
+    );
+    assert!(!resolved.content_root.join(".git").exists());
+}
+
+#[test]
+fn branch_and_tag_selectors_with_identical_name_do_not_collide() {
+    let project = setup();
+    // A tag and a branch sharing one name, carrying different content: the tag selector must resolve through `refs/tags/`, and the selector kind must keep the two out of one cache slot.
+    git(&project.source_repo, &["tag", "shared-name"]);
+    git(
+        &project.source_repo,
+        &["checkout", "--quiet", "-b", "shared-name"],
+    );
+    fs::write(
+        project.source_repo.join("agents/demo-agent.md"),
+        "# demo agent on the branch\n",
+    )
+    .unwrap();
+    commit_all(&project.source_repo, "diverge on the branch");
+    git(&project.source_repo, &["checkout", "--quiet", "main"]);
+
+    let url = format!("file://{}", project.source_repo.display());
+    let manifest = format!(
+        r#"
+enozunu config-version=1 {{
+  provider {{
+    agents {{
+      agent "by-branch" {{
+        git {{
+          url "{url}"
+          branch "shared-name"
+          path "agents/demo-agent.md"
+        }}
+      }}
+      agent "by-tag" {{
+        git {{
+          url "{url}"
+          tag "shared-name"
+          path "agents/demo-agent.md"
+        }}
+      }}
+    }}
+  }}
+  consumer {{
+    claude {{
+      use-agents "by-branch" "by-tag"
+    }}
+  }}
+}}
+"#
+    );
+    fs::write(project.root.join("enozunu.kdl"), manifest).unwrap();
+
+    materialize(&project).unwrap();
+
+    let by_branch = fs::read_to_string(project.root.join(".claude/agents/by-branch.md")).unwrap();
+    let by_tag = fs::read_to_string(project.root.join(".claude/agents/by-tag.md")).unwrap();
+    assert_eq!(by_branch, "# demo agent on the branch\n");
+    assert_eq!(by_tag, "# demo agent\n");
+}
+
+#[test]
+fn follows_tag_moves_across_runs() {
+    let project = setup();
+    write_tag_manifest(&project, "v1.0.0");
+    git(&project.source_repo, &["tag", "v1.0.0"]);
+    materialize(&project).unwrap();
+    assert_eq!(
+        fs::read_to_string(project.root.join(".claude/agents/demo-agent.md")).unwrap(),
+        "# demo agent\n"
+    );
+
+    // A tag is a mutable ref: Enozunu re-resolves it each run rather than caching the first commit it saw.
+    fs::write(
+        project.source_repo.join("agents/demo-agent.md"),
+        "# demo agent v2\n",
+    )
+    .unwrap();
+    commit_all(&project.source_repo, "advance past the original tag");
+    git(&project.source_repo, &["tag", "--force", "v1.0.0"]);
+
+    materialize(&project).unwrap();
+
+    let agent = fs::read_to_string(project.root.join(".claude/agents/demo-agent.md")).unwrap();
+    assert_eq!(agent, "# demo agent v2\n");
+}
+
+#[test]
+fn rejects_an_unknown_tag_with_git_resolution_diagnostic() {
+    let project = setup();
+    write_tag_manifest(&project, "v9.9.9");
+
+    let diags = materialize(&project).unwrap_err();
+    assert!(
+        diags
+            .iter()
+            .any(|d| d.code == DiagnosticCode::GitResolution)
+    );
+    assert!(!project.root.join(".claude").exists());
+}
+
+/// Writes a manifest whose single agent source selects `tag` from the test source repository.
+fn write_tag_manifest(project: &TestProject, tag: &str) {
+    let url = format!("file://{}", project.source_repo.display());
+    let manifest = format!(
+        r#"
+enozunu config-version=1 {{
+  provider {{
+    agents {{
+      agent "demo-agent" {{
+        git {{
+          url "{url}"
+          tag "{tag}"
+          path "agents/demo-agent.md"
+        }}
+      }}
+    }}
+  }}
+  consumer {{
+    claude {{
+      use-agents "demo-agent"
+    }}
+  }}
+}}
+"#
+    );
+    fs::write(project.root.join("enozunu.kdl"), manifest).unwrap();
+}
+
+#[test]
 fn resolves_identical_revision_sources_once() {
     // A resolver that records every request, so two sources pinning the same (url, revision) are proven to resolve once.
     struct CountingResolver {

@@ -82,6 +82,9 @@ This makes early dogfooding easier while Skill and agent sources change frequent
 Branch selectors are mutable.
 Therefore v0.0.x does not guarantee exact reproducibility.
 
+A Git source may also select a tag, which reads more like a release than a branch name does.
+A tag is still a mutable ref that a remote can move or delete, so it carries the same reproducibility position as a branch.
+
 A Git source may instead pin an exact revision, which materializes the same commit on every run.
 Pinning is per source; it does not freeze a whole run.
 

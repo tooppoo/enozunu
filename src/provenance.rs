@@ -28,19 +28,20 @@ pub struct ProvenanceEntry {
     pub target_path: String,
 }
 
-/// The declared Git selector, recorded as one tagged shape for both branch and revision sources.
+/// The declared Git selector, recorded as one tagged shape for branch, tag, and revision sources.
 ///
-/// A single `selector` object rather than independent optional `branch` / `revision` fields keeps the record aligned with the manifest contract: exactly one selector exists, so consumers dispatch on `type` instead of probing which field is present.
+/// A single `selector` object rather than independent optional `branch` / `tag` / `revision` fields keeps the record aligned with the manifest contract: exactly one selector exists, so consumers dispatch on `type` instead of probing which field is present.
 #[derive(Debug, Serialize)]
 #[serde(tag = "type", content = "value", rename_all = "lowercase")]
 pub enum ProvenanceGitSelector {
     Branch(String),
+    Tag(String),
     Revision(String),
 }
 
 /// Source-kind-specific provenance fields, tagged so consumers can dispatch on `type` instead of probing for Git-only fields.
 ///
-/// A Git source records both the declared `selector` and the materialized `resolved_revision`; for a revision selector the two carry the same commit id, which records that the pin was honored.
+/// A Git source records both the declared `selector` and the materialized `resolved_revision`; for a revision selector the two carry the same commit id, which records that the pin was honored. For a branch or tag selector, `resolved_revision` is the only record of which commit the mutable ref pointed at during this run.
 /// A Gist source records `type: "gist"` with its id and pinned revision; it is never represented as `type: "git"` even though Git transport materialized it.
 /// `file` is present only for agent Gists, which select one file; a Skill Gist materializes the revision root and records no `file` key.
 #[derive(Debug, Serialize)]
@@ -123,6 +124,29 @@ mod tests {
     }
 
     #[test]
+    fn serializes_a_tag_selector_under_the_shared_tagged_shape() {
+        let tmp = tempfile::tempdir().unwrap();
+        let mut record = sample_record();
+        record.entries[0].source = ProvenanceSource::Git {
+            url: "https://example.com/repo".to_owned(),
+            selector: ProvenanceGitSelector::Tag("v1.0.0".to_owned()),
+            path: "skills/demo".to_owned(),
+            resolved_revision: "abc123".to_owned(),
+        };
+        write(tmp.path(), &record).unwrap();
+
+        let written = fs::read_to_string(tmp.path().join(PROVENANCE_REL_PATH)).unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&written).unwrap();
+        let source = &parsed["entries"][0]["source"];
+        assert_eq!(source["type"], "git");
+        assert_eq!(source["selector"]["type"], "tag");
+        assert_eq!(source["selector"]["value"], "v1.0.0");
+        assert!(source.get("tag").is_none());
+        // A tag is mutable, so the resolved commit is recorded separately rather than being implied by the selector.
+        assert_eq!(source["resolved_revision"], "abc123");
+    }
+
+    #[test]
     fn write_creates_the_record_under_a_missing_directory() {
         let tmp = tempfile::tempdir().unwrap();
         write(tmp.path(), &sample_record()).unwrap();
@@ -135,7 +159,7 @@ mod tests {
         let record: serde_json::Value = serde_json::from_str(&written).unwrap();
         let entries = record["entries"].as_array().unwrap();
         assert_eq!(entries[0]["source"]["type"], "git");
-        // The declared selector is one tagged object, not parallel optional `branch` / `revision` fields.
+        // The declared selector is one tagged object, not parallel optional `branch` / `tag` / `revision` fields.
         assert_eq!(entries[0]["source"]["selector"]["type"], "branch");
         assert_eq!(entries[0]["source"]["selector"]["value"], "main");
         assert!(entries[0]["source"].get("branch").is_none());

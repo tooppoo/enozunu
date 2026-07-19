@@ -111,7 +111,7 @@ The rationale for the block structure is recorded in [the source reference block
 
 ### Git Source Reference
 
-A `git` block selects its commit with exactly one selector: a mutable `branch` or an exact `revision`.
+A `git` block selects its commit with exactly one selector: a mutable `branch`, a mutable `tag`, or an exact `revision`.
 
 Branch selector:
 
@@ -119,6 +119,16 @@ Branch selector:
 git {
   url "https://github.com/example/repo"
   branch "main"
+  path ".claude/skills/example"
+}
+```
+
+Tag selector:
+
+```kdl
+git {
+  url "https://github.com/example/repo"
+  tag "v1.2.0"
   path ".claude/skills/example"
 }
 ```
@@ -136,18 +146,25 @@ git {
 Required fields:
 
 ```text
-url + exactly one of (branch, revision) + path
+url + exactly one of (branch, tag, revision) + path
 ```
 
 Semantics:
 
 - `url` is the Git repository URL.
 - `branch` resolves the current head of the branch on each run.
+- `tag` resolves the commit the tag currently points at, on each run.
 - `revision` pins one exact Git commit.
 - `path` is the artifact path inside the resolved Git checkout.
 - `path` must be relative and must not contain empty or `..` segments.
 
-Declaring both `branch` and `revision`, or neither, is rejected. Declaring any `git` field more than once is also rejected: repeated fields are a manifest error, not last-value-wins.
+Declaring more than one selector, or none, is rejected. Declaring any `git` field more than once is also rejected: repeated fields are a manifest error, not last-value-wins.
+
+`tag` is a mutable selector, not a pinning one. A Git tag can be moved or deleted on the remote, so Enozunu re-resolves it on every run and offers no more reproducibility than `branch`. Use `revision` for a source that must materialize the same commit every time. The resolved commit is recorded in `.enozunu/provenance.json`, which is where a moved tag becomes visible after the fact.
+
+A tag resolves through the fully-qualified `refs/tags/` namespace, so a repository holding both a branch and a tag of one name resolves the tag for a `tag` selector and the branch for a `branch` selector. An annotated tag is peeled to its commit, so a recorded revision is always a commit id and never a tag object id.
+
+`tag` must not be empty, must not begin with `-`, and must not contain `:`. The value reaches Git inside a `refs/tags/<tag>` refspec, where a leading `-` would be parsed as an option and `:` would separate source from destination.
 
 `revision` must be a canonical full SHA-1 commit id, exactly 40 lowercase ASCII hexadecimal characters:
 
@@ -155,11 +172,13 @@ Declaring both `branch` and `revision`, or neither, is rejected. Declaring any `
 ^[0-9a-f]{40}$
 ```
 
-`revision` identifies one exact commit; it is not an arbitrary Git revspec. Abbreviated, uppercase, and whitespace-padded object ids are rejected, as are tags, `HEAD`, relative expressions such as `main~3`, and SHA-256 object ids. After checkout, the resolver verifies that the resolved `HEAD` exactly equals the requested revision.
+`revision` identifies one exact commit; it is not an arbitrary Git revspec. Abbreviated, uppercase, and whitespace-padded object ids are rejected, as are tag names, `HEAD`, relative expressions such as `main~3`, and SHA-256 object ids. Select a tag with the `tag` field rather than by naming it in `revision`. After checkout, the resolver verifies that the resolved `HEAD` exactly equals the requested revision.
 
 The SHA-1 restriction reflects the v0.0.x source-host scope: GitHub uses SHA-1 object ids for the supported workflow, and SHA-256 repositories are not supported. The object-id contract will be reconsidered when support expands to other Git hosting systems or repository formats, including GitLab. The selector and object-id decisions are recorded in [the Git exact revision selector ADR](../design/adr/20260712T155345Z_git-exact-revision-selector.md).
 
-Each distinct `(url, selector kind, selector value)` combination is resolved once per run. The selector kind is part of that identity, so a branch whose name looks like a commit id never collides with an exact revision of the same text.
+Each distinct `(url, selector kind, selector value)` combination is resolved once per run. The selector kind is part of that identity, so a branch whose name looks like a commit id never collides with an exact revision of the same text, and a branch never collides with a tag of the same name.
+
+The tag selector contract is recorded in [the Git tag selector ADR](../design/adr/20260719T062207Z_git-tag-selector.md).
 
 ### Local Source Reference
 
@@ -350,7 +369,6 @@ The following are not supported in v0.0.x:
 ```text
 consumer targets other than claude and codex
 GitHub tree/blob URL shorthand
-Git tag selector
 Git latest selector
 Git version range
 Git symbolic or relative revspecs
@@ -365,7 +383,7 @@ Codex support is limited to Skill and custom agent materialization. `AGENTS.md`,
 For v0.0.x, Git source references must use the normalized form:
 
 ```text
-git { url + exactly one of (branch, revision) + path }
+git { url + exactly one of (branch, tag, revision) + path }
 ```
 
 ## Validation Rules
@@ -377,10 +395,11 @@ v0.0.x should reject:
 - `use-agents` references that do not exist under `provider.agents`
 - source declarations without exactly one source reference block
 - unsupported source reference blocks
-- `git` blocks without exactly one of `branch` and `revision`
+- `git` blocks without exactly one of `branch`, `tag`, and `revision`
 - duplicate `git` fields
 - unknown `git` fields
 - `git` `revision` values that are not canonical full SHA-1 commit ids
+- `git` `tag` values that are empty, begin with `-`, or contain `:`
 - Skill sources that do not contain `SKILL.md`
 - source paths that cannot be resolved
 - GitHub tree/blob URL shorthand
@@ -409,6 +428,14 @@ enozunu config-version=1 {
         git {
           url "https://github.com/tooppoo/reportage"
           branch "main"
+          path ".claude/skills/git-kura"
+        }
+      }
+
+      skill "released-git-kura" {
+        git {
+          url "https://github.com/tooppoo/reportage"
+          tag "v1.2.0"
           path ".claude/skills/git-kura"
         }
       }
@@ -464,7 +491,7 @@ enozunu config-version=1 {
 
   consumer {
     claude {
-      use-skills "git-kura" "pinned-git-kura" "local-git-kura" "semantic-line-breaks"
+      use-skills "git-kura" "released-git-kura" "pinned-git-kura" "local-git-kura" "semantic-line-breaks"
       use-agents "shell-script-reviewer" "gist-reviewer"
     }
 

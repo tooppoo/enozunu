@@ -3,8 +3,8 @@
 //! Git operations stay behind the `GitResolver` trait so the external `git` command can later be replaced by a library implementation.
 //! See docs/design/adr/20260708T075713Z_implement-enozunu-in-rust.md for that decision.
 //!
-//! Branch resolution and exact-revision resolution are separate selectors on one request, not one call whose contract is "branch".
-//! Keeping them type-distinct prevents an immutable revision from being silently resolved as if it were a branch name.
+//! Branch, tag, and exact-revision resolution are separate selectors on one request, not one call whose contract is "branch".
+//! Keeping them type-distinct prevents an immutable revision from being silently resolved as if it were a branch name, and keeps a tag from being resolved through the branch namespace.
 //!
 //! The resolver owns its Git cache and checkout layout; callers receive a Git-metadata-free exported content tree.
 //! Materialization therefore never reads a resolver cache directory.
@@ -35,11 +35,14 @@ impl CommitSha {
 
 /// Which commit of a repository to resolve.
 ///
-/// The two selectors are deliberately distinct types so a caller cannot pass a revision where a branch is expected.
-/// The type also serves as a resolution and cache key component: a branch whose name looks like a commit id stays distinct from a revision with the same text.
+/// The three selectors are deliberately distinct variants so a caller cannot pass a revision where a branch is expected, nor a tag name where a branch name is expected.
+/// The type also serves as a resolution and cache key component: a branch whose name looks like a commit id stays distinct from a revision with the same text, and a branch stays distinct from a tag of the same name.
+///
+/// `Branch` and `Tag` both name a mutable remote ref and resolve to whatever it points at on each run; only `Revision` names one fixed commit.
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub enum GitSelector {
     Branch(String),
+    Tag(String),
     Revision(CommitSha),
 }
 
@@ -133,12 +136,7 @@ impl CommandGitResolver {
                 &["fetch", "--quiet", "--depth", "1", "origin", "--", branch],
             )
             .map_err(|e| fetch_error(url, e))?;
-            run_git(dir, &["checkout", "--quiet", "--detach", "FETCH_HEAD"])
-                .map_err(|e| fetch_error(url, e))?;
-            // The cache must mirror the fetched commit exactly; leftover files would leak into the exported content tree.
-            run_git(dir, &["reset", "--quiet", "--hard", "HEAD"])
-                .map_err(|e| fetch_error(url, e))?;
-            run_git(dir, &["clean", "--quiet", "-ffdx"]).map_err(|e| fetch_error(url, e))?;
+            checkout_fetch_head(dir, url)?;
         } else {
             create_parent_dirs(dir)?;
             let dir_str = dir.to_string_lossy().into_owned();
@@ -148,17 +146,45 @@ impl CommandGitResolver {
             .map_err(|e| fetch_error(url, e))?;
         }
 
-        let commit = run_git(dir, &["rev-parse", "HEAD"])
-            .map_err(|e| fetch_error(url, e))?
-            .trim()
-            .to_owned();
+        finish_resolution(dir, url, entry.export)
+    }
 
-        export_content_tree(dir, &entry.export)?;
+    /// Resolves the commit a tag currently points at, through the fully-qualified `refs/tags/` namespace.
+    ///
+    /// A tag is resolved by an explicit `refs/tags/<tag>` refspec rather than the `--branch <name>` form `resolve_branch` uses, so a repository holding both a branch and a tag of one name always resolves the tag here. `--no-tags` keeps the clone from transferring every other tag, since resolution reads the requested tag from `FETCH_HEAD` and never consults a local tag ref.
+    ///
+    /// The fetch names a source ref with no destination, so the result lands in `FETCH_HEAD` only and no local tag ref is written. That keeps a tag that moved on the remote from needing a forced update, which a local `refs/tags/<tag>` would.
+    fn resolve_tag(&self, url: &str, tag: &str) -> Result<ResolvedSource, GitError> {
+        let entry = self.cache_entry(url, "tag", tag);
+        let dir = &entry.repo;
 
-        Ok(ResolvedSource {
-            commit,
-            content_root: entry.export,
-        })
+        if !dir.join(".git").exists() {
+            create_parent_dirs(dir)?;
+            let dir_str = dir.to_string_lossy().into_owned();
+            run_git_anywhere(&[
+                "clone",
+                "--quiet",
+                "--no-checkout",
+                "--depth",
+                "1",
+                "--no-tags",
+                "--",
+                url,
+                &dir_str,
+            ])
+            .map_err(|e| fetch_error(url, e))?;
+        }
+
+        // Validation rejects a tag containing `:`, so the interpolated value cannot split into a two-sided refspec here.
+        let tag_ref = format!("refs/tags/{tag}");
+        run_git(
+            dir,
+            &["fetch", "--quiet", "--depth", "1", "origin", "--", &tag_ref],
+        )
+        .map_err(|e| fetch_error(url, e))?;
+        checkout_fetch_head(dir, url)?;
+
+        finish_resolution(dir, url, entry.export)
     }
 
     fn resolve_revision(
@@ -212,6 +238,32 @@ impl CommandGitResolver {
             content_root: entry.export,
         })
     }
+}
+
+/// Checks out whatever the preceding fetch recorded in `FETCH_HEAD`, leaving the working tree an exact mirror of that commit.
+///
+/// Checkout peels an annotated tag object to its commit, so a subsequent `rev-parse HEAD` reports a commit id for both lightweight and annotated tags.
+fn checkout_fetch_head(dir: &Path, url: &str) -> Result<(), GitError> {
+    run_git(dir, &["checkout", "--quiet", "--detach", "FETCH_HEAD"])
+        .map_err(|e| fetch_error(url, e))?;
+    // The cache must mirror the fetched commit exactly; leftover files would leak into the exported content tree.
+    run_git(dir, &["reset", "--quiet", "--hard", "HEAD"]).map_err(|e| fetch_error(url, e))?;
+    run_git(dir, &["clean", "--quiet", "-ffdx"]).map_err(|e| fetch_error(url, e))?;
+    Ok(())
+}
+
+fn finish_resolution(dir: &Path, url: &str, export: PathBuf) -> Result<ResolvedSource, GitError> {
+    let commit = run_git(dir, &["rev-parse", "HEAD"])
+        .map_err(|e| fetch_error(url, e))?
+        .trim()
+        .to_owned();
+
+    export_content_tree(dir, &export)?;
+
+    Ok(ResolvedSource {
+        commit,
+        content_root: export,
+    })
 }
 
 /// One resolver cache slot: the Git checkout and the exported content tree derived from it.
@@ -283,6 +335,7 @@ impl GitResolver for CommandGitResolver {
     fn resolve(&self, request: &GitResolutionRequest) -> Result<ResolvedSource, GitError> {
         match &request.selector {
             GitSelector::Branch(branch) => self.resolve_branch(&request.url, branch),
+            GitSelector::Tag(tag) => self.resolve_tag(&request.url, tag),
             GitSelector::Revision(revision) => self.resolve_revision(&request.url, revision),
         }
     }

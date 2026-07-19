@@ -176,6 +176,7 @@ fn provenance_source(reference: &SourceReference, origin: &ResolvedOrigin) -> Pr
             url: url.clone(),
             selector: match selector {
                 GitSelector::Branch(branch) => ProvenanceGitSelector::Branch(branch.clone()),
+                GitSelector::Tag(tag) => ProvenanceGitSelector::Tag(tag.clone()),
                 GitSelector::Revision(sha) => {
                     ProvenanceGitSelector::Revision(sha.as_str().to_owned())
                 }

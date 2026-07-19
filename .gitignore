@@ -12,6 +12,9 @@ cov.json
 .agents/
 .claude/
 
+# vscode
+.vscode/
+
 # other
 *.lock
 *.local.json

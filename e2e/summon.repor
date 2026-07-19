@@ -1,7 +1,10 @@
 # E2E: `enozunu summon` materializes a selected source into its Claude-native path.
 #
-# Uses a `local` provider source so the happy path stays deterministic and
-# offline: a git source would depend on an external repository and the network.
+# Uses a `local` provider source to keep the baseline happy path free of git
+# setup: this case is about materialization into the Claude-native path, not
+# about source resolution. Git-source resolution is covered per selector in
+# summon_git_selectors.repor, which stays offline by building a repository in
+# the case workspace and referencing it with a `file://` URL.
 
 case "summon materializes a local skill source" {
   write <"sources/demo-skill/SKILL.md"> ```

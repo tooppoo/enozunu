@@ -1,0 +1,275 @@
+# E2E: `enozunu summon` resolves a `git` source over real git transport, once per selector.
+#
+# Each case builds a local repository inside the case workspace and points the
+# manifest at it with a `file://` URL, so the real resolver runs — clone/init,
+# fetch, checkout, export — while the run stays offline and deterministic. A
+# fake transport cannot cover that path, and a remote repository would make
+# these cases depend on the network.
+#
+# The manifest is written with a `SOURCE_URL` placeholder and substituted by a
+# shell step, because the workspace path is only known at run time. The same
+# applies to `PINNED_REVISION`, which must be a real commit id from the
+# repository built above it.
+#
+# Every case gives the branch tip different content from the commit the case
+# actually selects, so a case cannot pass by accidentally resolving HEAD.
+
+case "summon follows the branch head for a branch selector" {
+  $ git init --quiet --initial-branch main source-repo
+  $ git -C source-repo config user.email "e2e@example.com"
+  $ git -C source-repo config user.name "e2e"
+  write <"source-repo/skills/demo-skill/SKILL.md"> ```
+    ---
+    name: demo-skill
+    description: demo skill resolved over git transport
+    ---
+
+    # Demo Skill OLD
+    ```
+  $ git -C source-repo add --all
+  $ git -C source-repo commit --quiet -m old
+  # Advance the branch so the head differs from the first commit.
+  $ sed -i 's/Demo Skill OLD/Demo Skill NEW/' source-repo/skills/demo-skill/SKILL.md
+  $ git -C source-repo commit --quiet -am new
+  write <"enozunu.kdl"> ```
+    enozunu config-version=1 {
+      provider {
+        skills {
+          skill "demo-skill" {
+            git {
+              url "SOURCE_URL"
+              branch "main"
+              path "skills/demo-skill"
+            }
+          }
+        }
+      }
+      consumer {
+        claude {
+          use-skills "demo-skill"
+        }
+      }
+    }
+    ```
+  $ sed -i "s|SOURCE_URL|file://$PWD/source-repo|" enozunu.kdl
+  $ enozunu summon
+  assert {
+    exit 0
+    stdout contains "materialized"
+    # A branch selector resolves the current head, so the newer commit wins.
+    file <".claude/skills/demo-skill/SKILL.md"> contains "Demo Skill NEW"
+    not {
+      file <".claude/skills/demo-skill/SKILL.md"> contains "Demo Skill OLD"
+    }
+    file <".enozunu/provenance.json"> contains "\"type\": \"branch\""
+    file <".enozunu/provenance.json"> contains "\"value\": \"main\""
+  }
+}
+
+case "summon materializes the pinned revision, not the branch tip" {
+  $ git init --quiet --initial-branch main source-repo
+  $ git -C source-repo config user.email "e2e@example.com"
+  $ git -C source-repo config user.name "e2e"
+  write <"source-repo/skills/demo-skill/SKILL.md"> ```
+    ---
+    name: demo-skill
+    description: demo skill resolved over git transport
+    ---
+
+    # Demo Skill OLD
+    ```
+  $ git -C source-repo add --all
+  $ git -C source-repo commit --quiet -m old
+  $ sed -i 's/Demo Skill OLD/Demo Skill NEW/' source-repo/skills/demo-skill/SKILL.md
+  $ git -C source-repo commit --quiet -am new
+  write <"enozunu.kdl"> ```
+    enozunu config-version=1 {
+      provider {
+        skills {
+          skill "demo-skill" {
+            git {
+              url "SOURCE_URL"
+              revision "PINNED_REVISION"
+              path "skills/demo-skill"
+            }
+          }
+        }
+      }
+      consumer {
+        claude {
+          use-skills "demo-skill"
+        }
+      }
+    }
+    ```
+  $ sed -i "s|SOURCE_URL|file://$PWD/source-repo|" enozunu.kdl
+  # Pin the older commit, which is not the branch tip.
+  $ old=$(git -C source-repo rev-parse HEAD~1) && sed -i "s/PINNED_REVISION/$old/" enozunu.kdl
+  $ enozunu summon
+  assert {
+    exit 0
+    file <".claude/skills/demo-skill/SKILL.md"> contains "Demo Skill OLD"
+    not {
+      file <".claude/skills/demo-skill/SKILL.md"> contains "Demo Skill NEW"
+    }
+    file <".enozunu/provenance.json"> contains "\"type\": \"revision\""
+  }
+}
+
+case "summon materializes the commit an annotated tag points at, not the branch tip" {
+  $ git init --quiet --initial-branch main source-repo
+  $ git -C source-repo config user.email "e2e@example.com"
+  $ git -C source-repo config user.name "e2e"
+  write <"source-repo/skills/demo-skill/SKILL.md"> ```
+    ---
+    name: demo-skill
+    description: demo skill resolved over git transport
+    ---
+
+    # Demo Skill OLD
+    ```
+  $ git -C source-repo add --all
+  $ git -C source-repo commit --quiet -m old
+  $ sed -i 's/Demo Skill OLD/Demo Skill NEW/' source-repo/skills/demo-skill/SKILL.md
+  $ git -C source-repo commit --quiet -am new
+  # Tag the older commit. An annotated tag is its own object, so resolution must
+  # peel it to a commit rather than record the tag object id.
+  $ git -C source-repo tag --annotate --message "release 1.0.0" v1.0.0 HEAD~1
+  # Guard: if the tag object and its commit shared an id, the peeling assertion
+  # at the end of this case would hold trivially.
+  $ test "$(git -C source-repo rev-parse v1.0.0)" != "$(git -C source-repo rev-parse v1.0.0^{commit})"
+  assert {
+    exit 0
+  }
+  write <"enozunu.kdl"> ```
+    enozunu config-version=1 {
+      provider {
+        skills {
+          skill "demo-skill" {
+            git {
+              url "SOURCE_URL"
+              tag "v1.0.0"
+              path "skills/demo-skill"
+            }
+          }
+        }
+      }
+      consumer {
+        claude {
+          use-skills "demo-skill"
+        }
+      }
+    }
+    ```
+  $ sed -i "s|SOURCE_URL|file://$PWD/source-repo|" enozunu.kdl
+  $ enozunu summon
+  assert {
+    exit 0
+    file <".claude/skills/demo-skill/SKILL.md"> contains "Demo Skill OLD"
+    not {
+      file <".claude/skills/demo-skill/SKILL.md"> contains "Demo Skill NEW"
+    }
+    file <".enozunu/provenance.json"> contains "\"type\": \"tag\""
+    file <".enozunu/provenance.json"> contains "\"value\": \"v1.0.0\""
+  }
+  # The recorded revision is the tagged commit, not the annotated tag object.
+  # Asserted through a shell step because the expected id is only known at run time.
+  $ commit=$(git -C source-repo rev-parse v1.0.0^{commit}) && grep -q "\"resolved_revision\": \"$commit\"" .enozunu/provenance.json
+  assert {
+    exit 0
+  }
+}
+
+case "summon reports a tag that does not exist" {
+  $ git init --quiet --initial-branch main source-repo
+  $ git -C source-repo config user.email "e2e@example.com"
+  $ git -C source-repo config user.name "e2e"
+  write <"source-repo/skills/demo-skill/SKILL.md"> ```
+    ---
+    name: demo-skill
+    description: demo skill resolved over git transport
+    ---
+
+    # Demo Skill
+    ```
+  $ git -C source-repo add --all
+  $ git -C source-repo commit --quiet -m only
+  write <"enozunu.kdl"> ```
+    enozunu config-version=1 {
+      provider {
+        skills {
+          skill "demo-skill" {
+            git {
+              url "SOURCE_URL"
+              tag "v9.9.9"
+              path "skills/demo-skill"
+            }
+          }
+        }
+      }
+      consumer {
+        claude {
+          use-skills "demo-skill"
+        }
+      }
+    }
+    ```
+  $ sed -i "s|SOURCE_URL|file://$PWD/source-repo|" enozunu.kdl
+  $ enozunu summon
+  assert {
+    exit 1
+    # Classification is by diagnostic code, not message text: the repository was
+    # reachable but the selector did not resolve.
+    stderr contains "git-resolution"
+    not {
+      dir <".claude"> exists
+    }
+  }
+}
+
+case "summon reports a revision that does not exist" {
+  $ git init --quiet --initial-branch main source-repo
+  $ git -C source-repo config user.email "e2e@example.com"
+  $ git -C source-repo config user.name "e2e"
+  write <"source-repo/skills/demo-skill/SKILL.md"> ```
+    ---
+    name: demo-skill
+    description: demo skill resolved over git transport
+    ---
+
+    # Demo Skill
+    ```
+  $ git -C source-repo add --all
+  $ git -C source-repo commit --quiet -m only
+  write <"enozunu.kdl"> ```
+    enozunu config-version=1 {
+      provider {
+        skills {
+          skill "demo-skill" {
+            git {
+              url "SOURCE_URL"
+              revision "0123456789abcdef0123456789abcdef01234567"
+              path "skills/demo-skill"
+            }
+          }
+        }
+      }
+      consumer {
+        claude {
+          use-skills "demo-skill"
+        }
+      }
+    }
+    ```
+  $ sed -i "s|SOURCE_URL|file://$PWD/source-repo|" enozunu.kdl
+  $ enozunu summon
+  assert {
+    exit 1
+    # A well-formed commit id absent from the fetched repository reaches the
+    # resolver, so it is a git-resolution failure rather than a manifest error.
+    stderr contains "git-resolution"
+    not {
+      dir <".claude"> exists
+    }
+  }
+}

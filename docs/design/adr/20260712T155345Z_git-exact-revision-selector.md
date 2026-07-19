@@ -107,3 +107,4 @@ The version field exists to mark a future migration boundary once external consu
 - Issue: [#32](https://github.com/tooppoo/enozunu/issues/32)
 - [The branch-selector-first ADR](20260708T104203Z_branch-selector-first-reproducibility-deferred.md), whose deferral of exact revision selectors this ADR ends ahead of the v0.1.x plan
 - [The Gist source reference ADR](20260710T220338Z_gist-first-class-source-reference.md), which introduced revision pinning for Gist sources
+- [The Git tag selector ADR](20260719T062207Z_git-tag-selector.md), which added the tag selector this ADR left as future work, extending the selector exclusivity rule and the tagged provenance selector to three members

@@ -71,7 +71,7 @@ pub enum GistArtifactSelector {
 /// See docs/guide/manifest.md for the supported source reference policy.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SourceReference {
-    /// The commit is selected by `selector` — a sum type rather than parallel optional `branch` / `revision` fields — so the invalid states "both selectors" and "no selector" cannot reach the resolution layer.
+    /// The commit is selected by `selector` — a sum type rather than parallel optional `branch` / `tag` / `revision` fields — so the invalid states "more than one selector" and "no selector" cannot reach the resolution layer.
     Git {
         url: String,
         selector: GitSelector,
@@ -317,8 +317,8 @@ fn parse_source_reference(
                 "git" => git_blocks.push(block),
                 "local" => local_blocks.push(block),
                 "gist" => gist_blocks.push(block),
-                // `branch` and `path` were top-level fields before source reference blocks existed, so their appearance here most likely means an unmigrated manifest; `revision` is grouped with them because it is also a `git` block field.
-                other @ ("branch" | "revision" | "path" | "url") => {
+                // `branch` and `path` were top-level fields before source reference blocks existed, so their appearance here most likely means an unmigrated manifest; `revision` and `tag` are grouped with them because they are also `git` block fields.
+                other @ ("branch" | "revision" | "tag" | "path" | "url") => {
                     diags.push(Diagnostic::new(
                         DiagnosticCode::UnsupportedSourceReference,
                         format!(
@@ -389,6 +389,7 @@ fn parse_git_reference(
 
     let mut url = None;
     let mut branch = None;
+    let mut tag = None;
     let mut revision = None;
     let mut path = None;
     let mut ok = true;
@@ -401,6 +402,7 @@ fn parse_git_reference(
             let slot = match field_name {
                 "url" => Some(&mut url),
                 "branch" => Some(&mut branch),
+                "tag" => Some(&mut tag),
                 "revision" => Some(&mut revision),
                 "path" => Some(&mut path),
                 _ => None,
@@ -430,7 +432,7 @@ fn parse_git_reference(
                     diags.push(Diagnostic::new(
                         DiagnosticCode::UnsupportedSourceReference,
                         format!(
-                            "`git` block of {kind} `{name}` uses unsupported field `{field_name}`; it accepts url + path + exactly one of branch, revision"
+                            "`git` block of {kind} `{name}` uses unsupported field `{field_name}`; it accepts url + path + exactly one of branch, tag, revision"
                         ),
                     ));
                     ok = false;
@@ -449,26 +451,34 @@ fn parse_git_reference(
         }
     }
 
-    match (&branch, &revision) {
-        (None, None) => {
-            diags.push(Diagnostic::new(
-                DiagnosticCode::ManifestShape,
-                format!(
-                    "`git` block of {kind} `{name}` must declare exactly one selector: `branch` or `revision`"
-                ),
-            ));
-            ok = false;
-        }
-        (Some(_), Some(_)) => {
-            diags.push(Diagnostic::new(
-                DiagnosticCode::ManifestShape,
-                format!(
-                    "`git` block of {kind} `{name}` declares both `branch` and `revision`; exactly one selector is allowed"
-                ),
-            ));
-            ok = false;
-        }
-        _ => {}
+    // Exclusivity is checked over the whole selector set rather than pairwise, so the report names exactly which selectors were declared for any combination of the three.
+    let declared_selectors: Vec<&str> = [
+        ("branch", branch.is_some()),
+        ("tag", tag.is_some()),
+        ("revision", revision.is_some()),
+    ]
+    .into_iter()
+    .filter_map(|(field, declared)| declared.then_some(field))
+    .collect();
+
+    if declared_selectors.len() != 1 {
+        let detail = if declared_selectors.is_empty() {
+            "none is declared".to_owned()
+        } else {
+            let declared = declared_selectors
+                .iter()
+                .map(|field| format!("`{field}`"))
+                .collect::<Vec<_>>()
+                .join(", ");
+            format!("{declared} are declared")
+        };
+        diags.push(Diagnostic::new(
+            DiagnosticCode::ManifestShape,
+            format!(
+                "`git` block of {kind} `{name}` must declare exactly one selector out of `branch`, `tag`, and `revision`, but {detail}"
+            ),
+        ));
+        ok = false;
     }
 
     if !ok {
@@ -480,8 +490,12 @@ fn parse_git_reference(
 
     // Manifest values reach the external git command as arguments.
     // A leading `-` would let git parse a value as an option (for example `--upload-pack=<command>`), so such values are rejected as configuration errors.
-    // A validated revision is lowercase hexadecimal, so only `url` and `branch` can carry such a value.
-    for (field, value) in [("url", Some(&url)), ("branch", branch.as_ref())] {
+    // A validated revision is lowercase hexadecimal, so only `url`, `branch`, and `tag` can carry such a value.
+    for (field, value) in [
+        ("url", Some(&url)),
+        ("branch", branch.as_ref()),
+        ("tag", tag.as_ref()),
+    ] {
         if value.is_some_and(|v| v.starts_with('-')) {
             diags.push(Diagnostic::new(
                 DiagnosticCode::ManifestShape,
@@ -493,8 +507,8 @@ fn parse_git_reference(
         }
     }
 
-    let selector = match (branch, revision) {
-        (Some(branch), None) => {
+    let selector = match (branch, tag, revision) {
+        (Some(branch), None, None) => {
             if branch.is_empty() {
                 diags.push(Diagnostic::new(
                     DiagnosticCode::ManifestShape,
@@ -504,7 +518,37 @@ fn parse_git_reference(
             }
             GitSelector::Branch(branch)
         }
-        (None, Some(revision_raw)) => {
+        (None, Some(tag), None) => {
+            if tag.is_empty() {
+                diags.push(Diagnostic::new(
+                    DiagnosticCode::ManifestShape,
+                    format!("`tag` of {kind} `{name}` must not be empty"),
+                ));
+                return None;
+            }
+            // The value reaches git inside a `refs/tags/<tag>` refspec, where `:` separates source from destination; a tag carrying one would fetch a different ref than the manifest declares.
+            if tag.contains(':') {
+                diags.push(Diagnostic::new(
+                    DiagnosticCode::ManifestShape,
+                    format!(
+                        "`tag` of {kind} `{name}` must not contain `:`; it would be interpreted as a git refspec separator"
+                    ),
+                ));
+                return None;
+            }
+            // The resolver adds the `refs/tags/` prefix, so an already-qualified value would resolve `refs/tags/refs/tags/<tag>`. Rejecting it here reports a manifest mistake as a manifest error instead of as a remote-resolution failure after a network round-trip.
+            if tag.starts_with("refs/") {
+                diags.push(Diagnostic::new(
+                    DiagnosticCode::ManifestShape,
+                    format!(
+                        "`tag` of {kind} `{name}` must be a bare tag name without a `refs/` prefix; the `refs/tags/` namespace is applied during resolution"
+                    ),
+                ));
+                return None;
+            }
+            GitSelector::Tag(tag)
+        }
+        (None, None, Some(revision_raw)) => {
             let Some(revision) = CommitSha::parse(&revision_raw) else {
                 diags.push(Diagnostic::new(
                     DiagnosticCode::InvalidRevision,
@@ -963,6 +1007,10 @@ enozunu config-version=1 {
         result.unwrap_err().into_iter().map(|d| d.code).collect()
     }
 
+    fn messages(result: Result<Manifest, Vec<Diagnostic>>) -> Vec<String> {
+        result.unwrap_err().into_iter().map(|d| d.message).collect()
+    }
+
     #[test]
     fn parses_valid_manifest() {
         let manifest = parse(VALID).unwrap();
@@ -1238,6 +1286,116 @@ enozunu config-version=1 {{
           path "s/example""#,
         );
         assert!(codes(parse(&text)).contains(&DiagnosticCode::ManifestShape));
+        // The report names every selector the author may choose from, so a manifest missing one does not have to be cross-referenced against the guide.
+        assert!(
+            messages(parse(&text)).iter().any(|m| {
+                m.contains("`branch`") && m.contains("`tag`") && m.contains("`revision`")
+            }),
+            "the missing-selector report must name all three selectors"
+        );
+    }
+
+    #[test]
+    fn parses_a_git_source_with_a_tag_selector() {
+        let text = skill_git(
+            r#"          url "https://example.com/r"
+          tag "v1.0.0"
+          path "s/example""#,
+        );
+        let manifest = parse(&text).unwrap();
+        assert_eq!(
+            manifest.provider.skills[0].reference,
+            SourceReference::Git {
+                url: "https://example.com/r".to_owned(),
+                selector: GitSelector::Tag("v1.0.0".to_owned()),
+                path: "s/example".to_owned(),
+            }
+        );
+    }
+
+    #[test]
+    fn rejects_a_git_source_declaring_a_tag_with_another_selector() {
+        for other in [
+            r#"branch "main""#,
+            r#"revision "468aac8caed5f0c3b859b8286968e2c78e2b8760""#,
+        ] {
+            let text = skill_git(&format!(
+                r#"          url "https://example.com/r"
+          tag "v1.0.0"
+          {other}
+          path "s/example""#
+            ));
+            assert!(
+                codes(parse(&text)).contains(&DiagnosticCode::ManifestShape),
+                "`tag` combined with `{other}` must be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_a_git_source_declaring_all_three_selectors() {
+        let text = skill_git(
+            r#"          url "https://example.com/r"
+          branch "main"
+          tag "v1.0.0"
+          revision "468aac8caed5f0c3b859b8286968e2c78e2b8760"
+          path "s/example""#,
+        );
+        assert!(codes(parse(&text)).contains(&DiagnosticCode::ManifestShape));
+        // The report lists exactly which selectors collided, not just that more than one was present.
+        assert!(
+            messages(parse(&text)).iter().any(|m| {
+                m.contains("`branch`") && m.contains("`tag`") && m.contains("`revision`")
+            }),
+            "the conflicting-selector report must name each declared selector"
+        );
+    }
+
+    #[test]
+    fn rejects_an_empty_tag() {
+        let text = skill_git(
+            r#"          url "https://example.com/r"
+          tag ""
+          path "s/example""#,
+        );
+        assert!(codes(parse(&text)).contains(&DiagnosticCode::ManifestShape));
+    }
+
+    #[test]
+    fn rejects_a_tag_that_looks_like_a_git_option() {
+        let text = skill_git(
+            r#"          url "https://example.com/r"
+          tag "--upload-pack=touch /tmp/pwned"
+          path "s/example""#,
+        );
+        assert!(codes(parse(&text)).contains(&DiagnosticCode::ManifestShape));
+    }
+
+    #[test]
+    fn rejects_a_tag_containing_a_refspec_separator() {
+        // The value is interpolated into `refs/tags/<tag>`, so a `:` would turn the refspec into a source:destination pair.
+        let text = skill_git(
+            r#"          url "https://example.com/r"
+          tag "v1.0.0:refs/heads/main"
+          path "s/example""#,
+        );
+        assert!(codes(parse(&text)).contains(&DiagnosticCode::ManifestShape));
+    }
+
+    #[test]
+    fn rejects_an_already_qualified_tag() {
+        // The resolver applies `refs/tags/` itself, so these would resolve `refs/tags/refs/...` and fail only at fetch time.
+        for tag in ["refs/tags/v1.0.0", "refs/heads/main"] {
+            let text = skill_git(&format!(
+                r#"          url "https://example.com/r"
+          tag "{tag}"
+          path "s/example""#
+            ));
+            assert!(
+                codes(parse(&text)).contains(&DiagnosticCode::ManifestShape),
+                "an already-qualified tag `{tag}` must be rejected at parse time"
+            );
+        }
     }
 
     #[test]
@@ -1264,6 +1422,15 @@ enozunu config-version=1 {{
             r#"          url "https://example.com/r"
           revision "468aac8caed5f0c3b859b8286968e2c78e2b8760"
           revision "468aac8caed5f0c3b859b8286968e2c78e2b8760"
+          path "s/example""#,
+        );
+        assert!(codes(parse(&text)).contains(&DiagnosticCode::ManifestShape));
+
+        // A duplicate `tag` is likewise checked with a tag selector so the duplication is the only error.
+        let text = skill_git(
+            r#"          url "https://example.com/r"
+          tag "v1.0.0"
+          tag "v1.0.0"
           path "s/example""#,
         );
         assert!(codes(parse(&text)).contains(&DiagnosticCode::ManifestShape));
@@ -1300,7 +1467,7 @@ enozunu config-version=1 {{
             r#"          url "https://example.com/r"
           branch "main"
           path "s/example"
-          tag "v1.0.0""#,
+          depth "1""#,
         );
         assert!(codes(parse(&text)).contains(&DiagnosticCode::UnsupportedSourceReference));
     }

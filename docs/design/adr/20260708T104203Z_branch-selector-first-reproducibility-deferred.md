@@ -38,3 +38,4 @@ Tag selectors are introduced after revision selectors.
 
 - Issue: [#8](https://github.com/tooppoo/enozunu/issues/8)
 - [The Git exact revision selector ADR](20260712T155345Z_git-exact-revision-selector.md) later adopted exact revision selectors within v0.0.x, ahead of the v0.1.x plan recorded here; reproducibility guarantees remain deferred.
+- [The Git tag selector ADR](20260719T062207Z_git-tag-selector.md) later added tag selectors, following the ordering recorded here; a tag is treated as a mutable selector, so it does not change the reproducibility position above.

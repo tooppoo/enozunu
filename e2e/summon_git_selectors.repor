@@ -36,7 +36,7 @@ case "summon follows the branch head for a branch selector" {
 
     # Demo Skill OLD
     ```
-  $ git -C source-repo add --all
+  $ GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 git -C source-repo add --all
   $ GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 git -C source-repo commit --quiet -m old
   # Advance the branch so the head differs from the first commit.
   $ sed -i 's/Demo Skill OLD/Demo Skill NEW/' source-repo/skills/demo-skill/SKILL.md
@@ -88,7 +88,7 @@ case "summon materializes the pinned revision, not the branch tip" {
 
     # Demo Skill OLD
     ```
-  $ git -C source-repo add --all
+  $ GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 git -C source-repo add --all
   $ GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 git -C source-repo commit --quiet -m old
   $ sed -i 's/Demo Skill OLD/Demo Skill NEW/' source-repo/skills/demo-skill/SKILL.md
   $ GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 git -C source-repo commit --quiet -am new
@@ -138,7 +138,7 @@ case "summon materializes the commit an annotated tag points at, not the branch 
 
     # Demo Skill OLD
     ```
-  $ git -C source-repo add --all
+  $ GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 git -C source-repo add --all
   $ GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 git -C source-repo commit --quiet -m old
   $ sed -i 's/Demo Skill OLD/Demo Skill NEW/' source-repo/skills/demo-skill/SKILL.md
   $ GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 git -C source-repo commit --quiet -am new
@@ -202,7 +202,7 @@ case "summon reports a tag that does not exist" {
 
     # Demo Skill
     ```
-  $ git -C source-repo add --all
+  $ GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 git -C source-repo add --all
   $ GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 git -C source-repo commit --quiet -m only
   write <"enozunu.kdl"> ```
     enozunu config-version=1 {
@@ -231,6 +231,12 @@ case "summon reports a tag that does not exist" {
   $ git -C source-repo rev-parse HEAD
   assert {
     exit 0
+    # The manifest must also actually point at that fixture: an unsubstituted
+    # `SOURCE_URL` clears manifest validation and fails at the resolver with the
+    # same diagnostic this case asserts.
+    not {
+      file <"enozunu.kdl"> contains "SOURCE_URL"
+    }
   }
   $ enozunu summon
   assert {
@@ -256,7 +262,7 @@ case "summon reports a revision that does not exist" {
 
     # Demo Skill
     ```
-  $ git -C source-repo add --all
+  $ GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 git -C source-repo add --all
   $ GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 git -C source-repo commit --quiet -m only
   write <"enozunu.kdl"> ```
     enozunu config-version=1 {
@@ -284,6 +290,12 @@ case "summon reports a revision that does not exist" {
   $ git -C source-repo rev-parse HEAD
   assert {
     exit 0
+    # The manifest must also actually point at that fixture: an unsubstituted
+    # `SOURCE_URL` clears manifest validation and fails at the resolver with the
+    # same diagnostic this case asserts.
+    not {
+      file <"enozunu.kdl"> contains "SOURCE_URL"
+    }
   }
   $ enozunu summon
   assert {

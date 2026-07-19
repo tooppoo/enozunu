@@ -71,7 +71,7 @@ pub enum GistArtifactSelector {
 /// See docs/guide/manifest.md for the supported source reference policy.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum SourceReference {
-    /// The commit is selected by `selector` — a sum type rather than parallel optional `branch` / `revision` fields — so the invalid states "both selectors" and "no selector" cannot reach the resolution layer.
+    /// The commit is selected by `selector` — a sum type rather than parallel optional `branch` / `tag` / `revision` fields — so the invalid states "more than one selector" and "no selector" cannot reach the resolution layer.
     Git {
         url: String,
         selector: GitSelector,
@@ -532,6 +532,16 @@ fn parse_git_reference(
                     DiagnosticCode::ManifestShape,
                     format!(
                         "`tag` of {kind} `{name}` must not contain `:`; it would be interpreted as a git refspec separator"
+                    ),
+                ));
+                return None;
+            }
+            // The resolver adds the `refs/tags/` prefix, so an already-qualified value would resolve `refs/tags/refs/tags/<tag>`. Rejecting it here reports a manifest mistake as a manifest error instead of as a remote-resolution failure after a network round-trip.
+            if tag.starts_with("refs/") {
+                diags.push(Diagnostic::new(
+                    DiagnosticCode::ManifestShape,
+                    format!(
+                        "`tag` of {kind} `{name}` must be a bare tag name without a `refs/` prefix; the `refs/tags/` namespace is applied during resolution"
                     ),
                 ));
                 return None;
@@ -1370,6 +1380,22 @@ enozunu config-version=1 {{
           path "s/example""#,
         );
         assert!(codes(parse(&text)).contains(&DiagnosticCode::ManifestShape));
+    }
+
+    #[test]
+    fn rejects_an_already_qualified_tag() {
+        // The resolver applies `refs/tags/` itself, so these would resolve `refs/tags/refs/...` and fail only at fetch time.
+        for tag in ["refs/tags/v1.0.0", "refs/heads/main"] {
+            let text = skill_git(&format!(
+                r#"          url "https://example.com/r"
+          tag "{tag}"
+          path "s/example""#
+            ));
+            assert!(
+                codes(parse(&text)).contains(&DiagnosticCode::ManifestShape),
+                "an already-qualified tag `{tag}` must be rejected at parse time"
+            );
+        }
     }
 
     #[test]

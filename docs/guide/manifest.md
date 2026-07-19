@@ -164,7 +164,7 @@ Declaring more than one selector, or none, is rejected. Declaring any `git` fiel
 
 A tag resolves through the fully-qualified `refs/tags/` namespace, so a repository holding both a branch and a tag of one name resolves the tag for a `tag` selector and the branch for a `branch` selector. An annotated tag is peeled to its commit, so a recorded revision is always a commit id and never a tag object id.
 
-`tag` must not be empty, must not begin with `-`, and must not contain `:`. The value reaches Git inside a `refs/tags/<tag>` refspec, where a leading `-` would be parsed as an option and `:` would separate source from destination.
+`tag` must be a bare tag name such as `v1.2.0`. It must not be empty, must not begin with `-`, must not contain `:`, and must not carry a `refs/` prefix. The value reaches Git inside a `refs/tags/<tag>` refspec, where a leading `-` would be parsed as an option, `:` would separate source from destination, and an already-qualified name would resolve `refs/tags/refs/tags/<tag>`.
 
 `revision` must be a canonical full SHA-1 commit id, exactly 40 lowercase ASCII hexadecimal characters:
 
@@ -399,7 +399,7 @@ v0.0.x should reject:
 - duplicate `git` fields
 - unknown `git` fields
 - `git` `revision` values that are not canonical full SHA-1 commit ids
-- `git` `tag` values that are empty, begin with `-`, or contain `:`
+- `git` `tag` values that are empty, begin with `-`, contain `:`, or carry a `refs/` prefix
 - Skill sources that do not contain `SKILL.md`
 - source paths that cannot be resolved
 - GitHub tree/blob URL shorthand

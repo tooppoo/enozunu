@@ -216,7 +216,7 @@ fn gist_key(id: &manifest::GistId, revision: &git::CommitSha) -> (String, String
 
 /// Resolves each distinct Git (url, selector) pair once so a single run sees one consistent commit per selector.
 ///
-/// The selector — kind and value — is part of the key, so a branch whose name looks like a commit id never shares a resolution with a revision of the same text.
+/// The selector — kind and value — is part of the key, so a branch whose name looks like a commit id never shares a resolution with a revision of the same text, and a branch never shares one with a tag of the same name.
 /// Local and Gist references are skipped here: local paths are checked directly against the filesystem, and Gist sources resolve through the Gist boundary.
 fn resolve_git_sources(
     planned: &[PlannedMaterialization],

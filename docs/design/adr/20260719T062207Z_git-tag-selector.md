@@ -41,10 +41,12 @@ A repository holding both a branch and a tag named `release` therefore always re
 The fetch names a source ref with no destination, so the result lands in `FETCH_HEAD` and no local tag ref is written; a tag that moved on the remote needs no forced update.
 An annotated tag is peeled to its commit, so the recorded revision is always a commit id and never a tag object id.
 
-A tag value must not be empty, must not begin with `-`, and must not contain `:`.
+A tag value must be a bare tag name: not empty, not beginning with `-`, not containing `:`, and not carrying a `refs/` prefix.
 
 The first two rules match the existing `branch` contract, where a leading `-` would let Git parse the value as an option.
-The `:` rule is specific to tags because the value is interpolated into a `refs/tags/<tag>` refspec, where `:` separates source from destination.
+The remaining two are specific to tags because the value is interpolated into a `refs/tags/<tag>` refspec.
+There, `:` separates source from destination, and an already-qualified value such as `refs/tags/v1.0.0` would resolve `refs/tags/refs/tags/v1.0.0`.
+Both are statically detectable, so they are rejected as manifest errors rather than surfacing as remote-resolution failures after a network round-trip.
 
 Resolution and caching continue to key each Git source by `(url, selector kind, selector value)`, as established for revisions.
 The selector kind is part of the key, so a branch and a tag of one name never share a resolution or a cache slot.
@@ -110,7 +112,7 @@ Branch resolution is therefore left unchanged.
 
 - Reproducibility guarantees such as lockfiles and frozen materialization remain future work, unchanged by this decision.
 - Symbolic revspecs, version ranges, and latest selectors remain unsupported.
-- Tag resolution uses a shallow clone, because a tag names a ref whose commit the remote can serve directly; only `revision` needs a full clone.
+- Tag resolution transfers only the tagged commit: a cache slot is bootstrapped as an empty repository and the tag is fetched shallowly straight from the URL. Cloning first would transfer a pack for the remote's default branch that the tag checkout then discards. Only `revision` needs a full clone, because a pinned commit may be absent from any ref tip.
 
 ## Compatibility
 

@@ -94,7 +94,7 @@ impl CommandGitResolver {
     }
 
     // The cache key must include the selector: each (url, selector) pair keeps its own checkout, and a shared checkout would let the last resolved selector silently overwrite content another `ResolvedSource` still points at.
-    // The selector kind is part of the key so a branch named like a SHA cannot collide with a revision of the same text.
+    // The selector kind is part of the key so a branch named like a SHA cannot collide with a revision of the same text, and a branch cannot collide with a tag of the same name.
     fn cache_entry(&self, url: &str, selector_kind: &str, selector: &str) -> CacheEntry {
         // The readable prefix aids debugging; the hash disambiguates keys that sanitize to the same prefix.
         let mut hasher = DefaultHasher::new();
@@ -151,7 +151,9 @@ impl CommandGitResolver {
 
     /// Resolves the commit a tag currently points at, through the fully-qualified `refs/tags/` namespace.
     ///
-    /// A tag is resolved by an explicit `refs/tags/<tag>` refspec rather than the `--branch <name>` form `resolve_branch` uses, so a repository holding both a branch and a tag of one name always resolves the tag here. `--no-tags` keeps the clone from transferring every other tag, since resolution reads the requested tag from `FETCH_HEAD` and never consults a local tag ref.
+    /// A tag is resolved by an explicit `refs/tags/<tag>` refspec rather than the `--branch <name>` form `resolve_branch` uses, so a repository holding both a branch and a tag of one name always resolves the tag here.
+    ///
+    /// The cache slot is bootstrapped with an empty repository rather than a clone, and the tag is fetched straight from the URL. A clone would first transfer a pack for the remote's default branch, which this path discards: the tag fetch and checkout that follow replace it wholesale.
     ///
     /// The fetch names a source ref with no destination, so the result lands in `FETCH_HEAD` only and no local tag ref is written. That keeps a tag that moved on the remote from needing a forced update, which a local `refs/tags/<tag>` would.
     fn resolve_tag(&self, url: &str, tag: &str) -> Result<ResolvedSource, GitError> {
@@ -159,27 +161,16 @@ impl CommandGitResolver {
         let dir = &entry.repo;
 
         if !dir.join(".git").exists() {
-            create_parent_dirs(dir)?;
-            let dir_str = dir.to_string_lossy().into_owned();
-            run_git_anywhere(&[
-                "clone",
-                "--quiet",
-                "--no-checkout",
-                "--depth",
-                "1",
-                "--no-tags",
-                "--",
-                url,
-                &dir_str,
-            ])
-            .map_err(|e| fetch_error(url, e))?;
+            std::fs::create_dir_all(dir)
+                .map_err(|e| GitError::Io(format!("failed to create cache directory: {e}")))?;
+            run_git(dir, &["init", "--quiet"]).map_err(|e| fetch_error(url, e))?;
         }
 
-        // Validation rejects a tag containing `:`, so the interpolated value cannot split into a two-sided refspec here.
+        // Validation rejects a tag that is empty, starts with `-`, contains `:`, or already carries a `refs/` prefix, so the interpolated value cannot split into a two-sided refspec or escape the tag namespace here.
         let tag_ref = format!("refs/tags/{tag}");
         run_git(
             dir,
-            &["fetch", "--quiet", "--depth", "1", "origin", "--", &tag_ref],
+            &["fetch", "--quiet", "--depth", "1", "--", url, &tag_ref],
         )
         .map_err(|e| fetch_error(url, e))?;
         checkout_fetch_head(dir, url)?;

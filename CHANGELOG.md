@@ -1,5 +1,17 @@
 # CHANGELOG
 
+## 0.1.0
+
+### added
+
+#### cli
+
+<!-- rellog:entry:start -->
+<!-- rellog:body:start -->
+support git tag
+<!-- rellog:body:end -->
+<!-- rellog:entry:end -->
+
 ## 0.0.1
 
 ### added

@@ -16,3 +16,10 @@ release-tag version:
 [group('release')]
 get-version:
   @sh scripts/get-version.sh
+
+[group('release')]
+update-version version:
+  rellog ready {{ version }}
+
+  toml set Cargo.toml package.version {{ version }} > Cargo.toml.tmp
+  mv Cargo.toml.tmp Cargo.toml

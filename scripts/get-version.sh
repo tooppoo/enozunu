@@ -11,46 +11,7 @@ if [ ! -f "$cargo_toml" ]; then
   exit 1
 fi
 
-version="$(
-  awk '
-    BEGIN {
-      in_package = 0
-    }
-
-    /^[[:space:]]*\[/ {
-      in_package = ($0 ~ /^[[:space:]]*\[package\][[:space:]]*$/)
-      next
-    }
-
-    in_package && /^[[:space:]]*version[[:space:]]*=/ {
-      line = $0
-
-      sub(/^[[:space:]]*version[[:space:]]*=[[:space:]]*/, "", line)
-      sub(/[[:space:]]*#.*$/, "", line)
-      sub(/^[[:space:]]*"/, "", line)
-      sub(/"[[:space:]]*$/, "", line)
-
-      print line
-      found = 1
-      exit
-    }
-
-    END {
-      if (!found) {
-        exit 1
-      }
-    }
-  ' "$cargo_toml"
-)" || {
-  echo "workspace.package.version not found in $cargo_toml" >&2
-  exit 1
-}
-
-case "$version" in
-  "")
-    echo "workspace.package.version is empty in $cargo_toml" >&2
-    exit 1
-    ;;
-esac
-
-printf '%s\n' "$version"
+grep -e "^version" "$cargo_toml" \
+  | cut -d"=" -f2 \
+  | sed "s/ //g" \
+  | sed 's/"//g'

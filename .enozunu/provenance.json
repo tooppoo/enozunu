@@ -9,7 +9,7 @@
         "url": "https://github.com/tooppoo/catalog-agent-tools",
         "branch": "main",
         "path": "common/skills/documentation-writing",
-        "resolved_revision": "e77f9ce841c81a9e80a0f5876def5517ea29a74f"
+        "resolved_revision": "3cac0ce2540a6052fea4e5a86af236c49ebf066d"
       },
       "target_ai": "claude",
       "target_path": ".claude/skills/documentation-writing"
@@ -22,7 +22,7 @@
         "url": "https://github.com/tooppoo/catalog-agent-tools",
         "branch": "main",
         "path": "common/skills/subagent-review-loop",
-        "resolved_revision": "e77f9ce841c81a9e80a0f5876def5517ea29a74f"
+        "resolved_revision": "3cac0ce2540a6052fea4e5a86af236c49ebf066d"
       },
       "target_ai": "claude",
       "target_path": ".claude/skills/subagent-review-loop"
@@ -35,7 +35,7 @@
         "url": "https://github.com/tooppoo/catalog-agent-tools",
         "branch": "main",
         "path": "common/skills/code-comment",
-        "resolved_revision": "e77f9ce841c81a9e80a0f5876def5517ea29a74f"
+        "resolved_revision": "3cac0ce2540a6052fea4e5a86af236c49ebf066d"
       },
       "target_ai": "claude",
       "target_path": ".claude/skills/code-comment"
@@ -48,7 +48,7 @@
         "url": "https://github.com/tooppoo/catalog-agent-tools",
         "branch": "main",
         "path": "common/skills/cli-output-design",
-        "resolved_revision": "e77f9ce841c81a9e80a0f5876def5517ea29a74f"
+        "resolved_revision": "3cac0ce2540a6052fea4e5a86af236c49ebf066d"
       },
       "target_ai": "claude",
       "target_path": ".claude/skills/cli-output-design"
@@ -61,10 +61,75 @@
         "url": "https://github.com/tooppoo/catalog-agent-tools",
         "branch": "main",
         "path": "common/skills/reportage",
-        "resolved_revision": "e77f9ce841c81a9e80a0f5876def5517ea29a74f"
+        "resolved_revision": "3cac0ce2540a6052fea4e5a86af236c49ebf066d"
       },
       "target_ai": "claude",
       "target_path": ".claude/skills/reportage"
+    },
+    {
+      "source_name": "documentation-writing",
+      "kind": "skill",
+      "source": {
+        "type": "git",
+        "url": "https://github.com/tooppoo/catalog-agent-tools",
+        "branch": "main",
+        "path": "common/skills/documentation-writing",
+        "resolved_revision": "3cac0ce2540a6052fea4e5a86af236c49ebf066d"
+      },
+      "target_ai": "codex",
+      "target_path": ".agents/skills/documentation-writing"
+    },
+    {
+      "source_name": "subagent-review-loop",
+      "kind": "skill",
+      "source": {
+        "type": "git",
+        "url": "https://github.com/tooppoo/catalog-agent-tools",
+        "branch": "main",
+        "path": "common/skills/subagent-review-loop",
+        "resolved_revision": "3cac0ce2540a6052fea4e5a86af236c49ebf066d"
+      },
+      "target_ai": "codex",
+      "target_path": ".agents/skills/subagent-review-loop"
+    },
+    {
+      "source_name": "code-comment",
+      "kind": "skill",
+      "source": {
+        "type": "git",
+        "url": "https://github.com/tooppoo/catalog-agent-tools",
+        "branch": "main",
+        "path": "common/skills/code-comment",
+        "resolved_revision": "3cac0ce2540a6052fea4e5a86af236c49ebf066d"
+      },
+      "target_ai": "codex",
+      "target_path": ".agents/skills/code-comment"
+    },
+    {
+      "source_name": "cli-output-design",
+      "kind": "skill",
+      "source": {
+        "type": "git",
+        "url": "https://github.com/tooppoo/catalog-agent-tools",
+        "branch": "main",
+        "path": "common/skills/cli-output-design",
+        "resolved_revision": "3cac0ce2540a6052fea4e5a86af236c49ebf066d"
+      },
+      "target_ai": "codex",
+      "target_path": ".agents/skills/cli-output-design"
+    },
+    {
+      "source_name": "reportage",
+      "kind": "skill",
+      "source": {
+        "type": "git",
+        "url": "https://github.com/tooppoo/catalog-agent-tools",
+        "branch": "main",
+        "path": "common/skills/reportage",
+        "resolved_revision": "3cac0ce2540a6052fea4e5a86af236c49ebf066d"
+      },
+      "target_ai": "codex",
+      "target_path": ".agents/skills/reportage"
     }
   ]
 }

@@ -70,5 +70,12 @@ enozunu config-version=1 {
         "cli-output-design" \
         "reportage"
     }
+    codex {
+      use-skills "documentation-writing" \
+        "subagent-review-loop" \
+        "code-comment" \
+        "cli-output-design" \
+        "reportage"
+    }
   }
 }

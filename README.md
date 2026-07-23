@@ -4,6 +4,15 @@ Enozunu(`役小角`) is a cross-provider configuration materializer for AI agent
 
 It centralizes human-authored definitions of AI-agent configuration sources and materializes them into target AI-native configuration paths.
 
+## Why Enozunu?
+
+Enozunu separates Skill and agent sources from the target-native files generated in each project.
+
+- **Reuse Skills and agents declaratively.** Declare sources and selections in `enozunu.kdl` instead of copying configuration files between projects.
+- **Distribute tool-specific Skills and agents without a custom installer.** Tool authors can publish the artifacts and an Enozunu-compatible manifest declaration instead of implementing their own setup mechanism.
+
+See [Why or Why Not Enozunu?](docs/guide/why-or-why-not.md) for the detailed use cases, responsibility boundaries, and current limitations.
+
 ## Quick Start
 
 ```sh
@@ -16,7 +25,7 @@ Enozunu manages where AI-agent configuration comes from and where it is material
 
 The supported target AIs are Claude and Codex. Both select from the same source pool, and each selection is materialized into that target's native path. For the exact placement of each artifact, see [the supported targets guide](docs/guide/support.md).
 
-Enozunu is in early design. The current v0.0.x goal is intentionally narrow and does not guarantee exact reproducibility. For the scope and non-goals of this phase, see [the v0.0.x goal](docs/design/v0.0.x-goal.md); to decide whether Enozunu fits your workflow, see [why or why not Enozunu](docs/guide/why-or-why-not.md).
+Enozunu is in early design. The current v0.0.x goal is intentionally narrow and does not guarantee exact reproducibility. For the scope and non-goals of this phase, see [the v0.0.x goal](docs/design/v0.0.x-goal.md).
 
 ## Usage
 

@@ -1,8 +1,7 @@
 # Why or Why Not Enozunu?
 
 Enozunu is useful when Skills and agents should remain maintained at their source,
-while each project declaratively selects and materializes the target AI-native
-configuration it consumes.
+while each project declaratively selects and materializes the target AI-native configuration it consumes.
 
 It separates three responsibilities:
 
@@ -17,15 +16,11 @@ regenerable from declarations, and traceable through materialization provenance.
 
 ### Reuse Skills and Agents Without Copying Them
 
-Without Enozunu, reusing a Skill or agent commonly means copying its files into
-each repository's `.claude/`, `.agents/`, or `.codex/` directories. Those copies
-can drift from their source, and the source revision or intended configuration
-may become unclear.
+Without Enozunu, reusing a Skill or agent commonly means copying its files into each repository's `.claude/`, `.agents/`, or `.codex/` directories.
+Those copies can drift from their source, and the source revision or intended configuration may become unclear.
 
-With Enozunu, a project declares the source and target selection in
-`enozunu.kdl`, then runs `enozunu summon` to materialize the target-native files.
-To reuse the same configuration elsewhere, reuse the relevant manifest
-declarations instead of copying generated directories.
+With Enozunu, a project declares the source and target selection in `enozunu.kdl`, then runs `enozunu summon` to materialize the target-native files.
+To reuse the same configuration elsewhere, reuse the relevant manifest declarations instead of copying generated directories.
 
 This provides:
 
@@ -34,31 +29,19 @@ This provides:
 - regeneration of target-native configuration from the manifest
 - provenance showing what source was materialized
 
-This does not imply lockfile-based exact reproducibility in v0.0.x. A `branch`
-or `tag` selector can resolve differently over time. Use an exact `revision` when
-a Git source must stay pinned to one commit, while recognizing that v0.0.x still
-does not provide a complete environment lockfile.
+A `branch` or `tag` selector can resolve differently over time.
+Use an exact `revision` when a Git source must stay pinned to one commit.
 
 ### Distribute Tool-Specific Skills and Agents Without a Custom Installer
 
-A tool author may want to distribute a Skill or agent that explains how an AI
-agent should use, review, or operate that tool. Without a shared materialization
-mechanism, each tool must document copy steps or implement its own setup script
-for target-specific configuration directories.
+A tool author may want to distribute a Skill or agent that explains how an AI agent should use, review, or operate that tool.
+Without a shared materialization mechanism, each tool must document copy steps or implement its own setup script for target-specific configuration directories.
 
-With Enozunu, the author can keep the Skill or agent in the tool repository or a
-Gist and provide an Enozunu-compatible manifest declaration. Users add the
-declaration to their project's `enozunu.kdl` and materialize it through the same
-`enozunu summon` workflow used for other Skills and agents.
+With Enozunu, the author can keep the Skill or agent in the tool repository or a Gist and provide an Enozunu-compatible manifest declaration.
+Users add the declaration to their project's `enozunu.kdl` and materialize it through the same `enozunu summon` workflow used for other Skills and agents.
 
 This removes the need for each tool to build a bespoke configuration installer.
-It does not transfer all distribution responsibilities to Enozunu: the tool
-author still maintains the artifact, its target-native format, compatible
-revisions, and usage guidance.
-
-v0.0.x also does not import third-party manifests or provide a registry or
-marketplace. A published declaration is input for the user's project manifest,
-not an independently installable Enozunu package.
+It does not transfer all distribution responsibilities to Enozunu: the tool author still maintains the artifact, its target-native format, compatible revisions, and usage guidance.
 
 For the declaration syntax, see [the manifest format guide](manifest.md).
 
@@ -76,31 +59,25 @@ Examples:
 - you want to inspect what source revision was materialized
 - you maintain a tool and want to distribute tool-specific Skills or agents without implementing a custom setup mechanism
 
-For v0.0.x, this means declaring sources in `enozunu.kdl` and materializing them
-into supported Claude or Codex project paths.
+For v0.0.x, this means declaring sources in `enozunu.kdl` and materializing them into supported Claude or Codex project paths.
 
 ## Do Not Use Enozunu When
 
 Do not use Enozunu when you want a target AI-native plugin or package manager.
 
-Enozunu does not discover packages, solve dependencies, install runtime plugins,
-or execute them. It resolves explicitly declared configuration sources and
-materializes configuration files.
+Enozunu does not discover packages, solve dependencies, install runtime plugins, or execute them.
+It resolves explicitly declared configuration sources and materializes configuration files.
 
 Do not use Enozunu when you want runtime compatibility guarantees.
 
-Enozunu does not guarantee that a Skill or agent created for Claude will work in
-Codex or another target AI. A source may be selected for multiple targets where
-its format is compatible, but compatibility remains the source author's and
-user's responsibility. Enozunu does not semantically convert agent definitions
-between target-native formats.
+Enozunu does not guarantee that a Skill or agent created for Claude will work in Codex or another target AI.
+A source may be selected for multiple targets where its format is compatible, but compatibility remains the source author's and user's responsibility.
+Enozunu does not semantically convert agent definitions between target-native formats.
 
-Do not use Enozunu when you want manual edits inside generated output to be
-preserved or merged.
+Do not use Enozunu when you want manual edits inside generated output to be preserved or merged.
 
-Generated output is regenerated from declarations. If a target AI-native
-directory needs to be hand-maintained, make it explicit Git-managed project
-configuration instead of treating it as Enozunu output.
+Generated output is regenerated from declarations.
+If a target AI-native directory needs to be hand-maintained, make it explicit Git-managed project configuration instead of treating it as Enozunu output.
 
 ## Not a Good Fit for v0.0.x
 

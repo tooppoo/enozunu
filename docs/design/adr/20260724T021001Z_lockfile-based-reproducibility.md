@@ -96,6 +96,22 @@ The two records also live on opposite sides of a run.
 Provenance is a snapshot written after a successful run and rewritten wholly by the next one; a lock is an input read before resolution that must stay stable until an explicit update.
 One file serving both roles would rewrite the resolution input as a side effect of every run, and revision changes would drown in target-path and rename noise in its diffs.
 
+### Placing the lock file under `.enozunu/`
+
+Grouping the lock with the other machine-generated files under `.enozunu/` would keep the project root smaller.
+It was rejected for three reasons.
+
+First, the lock pairs with the manifest, not with the project root: its path is derived from the manifest's directory, so a `--manifest` override relocates both together.
+Anchoring the lock at `.enozunu/` under the project root would let the manifest and its lock move independently through two different flags.
+
+Second, lockfile convention across ecosystems — `Cargo.lock`, `package-lock.json`, `Gemfile.lock`, `flake.lock` — places the lock next to its manifest.
+Terraform is the sharpest precedent: its ignored state lives hidden under `.terraform/`, while its committed lock deliberately sits at the root as `.terraform.lock.hcl`.
+A root-level lock inherits the habit users already have: a lock at the root is something you commit.
+
+Third, a lock diff is exactly the kind of change a reviewer should see — "this source moved from commit a to commit b" — and the reproducibility guarantee depends on the file being committed at all.
+A visible root file is harder to forget than one inside a hidden directory.
+Grouping by "machine-generated" would also blur the split this ADR establishes: `.enozunu/` already mixes a committed output record with an ignored cache, while the lock is an input.
+
 ### Locking every source, including `revision`, Gist, and local sources
 
 A uniform "everything is locked" rule reads simpler, but a lock entry for an already-pinned source duplicates the manifest and introduces a new staleness class — the manifest pin moves and the lock disagrees — while a local source has nothing lockable at all.

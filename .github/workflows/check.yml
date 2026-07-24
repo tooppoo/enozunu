@@ -42,7 +42,8 @@ jobs:
       # the CLI binary is version-pinned, not the installer script itself.
       - uses: tooppoo/reportage-actions/setup@57256bb4c6a89429c4c37133d1619436921263e3 # main
         with:
-          version: "0.0.3"
+          # 0.0.6 is required by e2e/summon_lockfile.repor (`document file` and `before_each`).
+          version: "0.0.6"
 
       - name: just check
         run: just check

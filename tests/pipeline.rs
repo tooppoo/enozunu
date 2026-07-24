@@ -1852,6 +1852,27 @@ fn frozen_fails_without_a_lockfile() {
 }
 
 #[test]
+fn frozen_without_a_lockfile_fails_even_without_mutable_sources() {
+    let project = setup();
+    setup_local_source(&project);
+    write_local_manifest(&project);
+
+    // A missing lock always means it was never created or committed, so frozen mode fails even
+    // though nothing in this manifest is mutable.
+    let diags = materialize_with(&project, LockMode::Frozen).unwrap_err();
+    assert!(
+        diags
+            .iter()
+            .any(|d| d.code == DiagnosticCode::LockOutOfDate)
+    );
+
+    // Once a normal run has written the (empty) lock, the same frozen run passes.
+    materialize(&project).unwrap();
+    let outcome = materialize_with(&project, LockMode::Frozen).unwrap();
+    assert_eq!(outcome.lock, LockOutcome::NotWritten);
+}
+
+#[test]
 fn frozen_fails_when_a_mutable_source_is_unlocked() {
     let project = setup();
     write_manifest(&project);

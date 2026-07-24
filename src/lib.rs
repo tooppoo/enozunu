@@ -233,10 +233,15 @@ pub fn run_materialize(
     })
 }
 
-/// Collects every mutable Git source that frozen mode cannot resolve from the lock file.
+/// Collects every reason frozen mode cannot resolve this run from the lock file.
 ///
-/// All gaps are gathered before failing — matching how manifest validation reports evidence — so
-/// one frozen run names every source that needs locking instead of failing one source at a time.
+/// A missing lock file fails unconditionally, even for a manifest with no mutable sources: every
+/// successful non-frozen run writes a lock — an empty one when nothing is mutable — so a missing
+/// file always means the lock was never created or never committed, which is exactly what frozen
+/// mode exists to catch.
+/// Per-source gaps are gathered before failing — matching how manifest validation reports
+/// evidence — so one frozen run names every source that needs locking instead of failing one
+/// source at a time.
 /// The check runs before any resolution, keeping a frozen failure free of network side effects.
 fn frozen_lock_diagnostics(
     planned: &[PlannedMaterialization],
@@ -244,6 +249,15 @@ fn frozen_lock_diagnostics(
     lock_path: &Path,
     locked: &HashMap<(String, GitSelector), CommitSha>,
 ) -> Vec<Diagnostic> {
+    if !lock_file_exists {
+        return vec![Diagnostic::new(
+            DiagnosticCode::LockOutOfDate,
+            format!(
+                "cannot materialize with --frozen: {} not found; run `enozunu summon` to create it",
+                lock_path.display()
+            ),
+        )];
+    }
     let mut diags = Vec::new();
     let mut seen = HashSet::new();
     for entry in planned {
@@ -258,17 +272,6 @@ fn frozen_lock_diagnostics(
         let key = (url.clone(), selector.clone());
         if locked.contains_key(&key) || !seen.insert(key) {
             continue;
-        }
-        if !lock_file_exists {
-            // Without a lock file every mutable source is unlocked; one report of the missing file
-            // says more than repeating the same cause per source.
-            return vec![Diagnostic::new(
-                DiagnosticCode::LockOutOfDate,
-                format!(
-                    "cannot materialize with --frozen: {} not found; run `enozunu summon` to create it",
-                    lock_path.display()
-                ),
-            )];
         }
         diags.push(Diagnostic::new(
             DiagnosticCode::LockOutOfDate,

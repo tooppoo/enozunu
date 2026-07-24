@@ -90,6 +90,20 @@ mod commit_sha_serde {
     }
 }
 
+/// A `lock-parse` diagnostic with the recovery route appended.
+///
+/// A corrupt lock fails every mode including `--update`, so no flag can recover from this
+/// diagnostic; the message itself must carry the way out.
+fn lock_parse_diagnostic(path: &Path, detail: impl std::fmt::Display) -> Diagnostic {
+    Diagnostic::new(
+        DiagnosticCode::LockParse,
+        format!(
+            "{detail}; restore {} from version control, or delete it and run `enozunu summon` to regenerate it",
+            path.display()
+        ),
+    )
+}
+
 /// Reads the lock file, returning `Ok(None)` when it does not exist.
 ///
 /// The `version` field is checked on a raw JSON value before the record shape is deserialized,
@@ -109,10 +123,7 @@ pub fn read(path: &Path) -> Result<Option<LockRecord>, Diagnostic> {
     };
 
     let value: serde_json::Value = serde_json::from_str(&text).map_err(|e| {
-        Diagnostic::new(
-            DiagnosticCode::LockParse,
-            format!("failed to parse {}: {e}", path.display()),
-        )
+        lock_parse_diagnostic(path, format!("failed to parse {}: {e}", path.display()))
     })?;
     let version = value.get("version").and_then(serde_json::Value::as_u64);
     match version {
@@ -127,8 +138,8 @@ pub fn read(path: &Path) -> Result<Option<LockRecord>, Diagnostic> {
             ));
         }
         None => {
-            return Err(Diagnostic::new(
-                DiagnosticCode::LockParse,
+            return Err(lock_parse_diagnostic(
+                path,
                 format!(
                     "{} does not declare a numeric `version` field",
                     path.display()
@@ -138,10 +149,7 @@ pub fn read(path: &Path) -> Result<Option<LockRecord>, Diagnostic> {
     }
 
     let record: LockRecord = serde_json::from_value(value).map_err(|e| {
-        Diagnostic::new(
-            DiagnosticCode::LockParse,
-            format!("failed to parse {}: {e}", path.display()),
-        )
+        lock_parse_diagnostic(path, format!("failed to parse {}: {e}", path.display()))
     })?;
     Ok(Some(record))
 }
@@ -158,6 +166,10 @@ pub enum WriteOutcome {
 ///
 /// Skipping the no-op write keeps repeated `summon` runs from churning the file's mtime and keeps
 /// the CLI's "updated" line tied to an actual content change.
+///
+/// The write lands in a same-directory temporary file that is renamed into place. A corrupt lock
+/// fails every mode including `--update`, so a torn plain write — process kill, disk full — would
+/// leave the project unable to summon at all; the atomic rename closes that window.
 pub fn write(path: &Path, record: &LockRecord) -> Result<WriteOutcome, Diagnostic> {
     let json = serde_json::to_string_pretty(record).map_err(|e| {
         Diagnostic::new(
@@ -180,7 +192,14 @@ pub fn write(path: &Path, record: &LockRecord) -> Result<WriteOutcome, Diagnosti
         return Ok(WriteOutcome::Unchanged);
     }
 
-    fs::write(path, json).map_err(|e| {
+    let temp_path = path.with_extension("json.tmp");
+    fs::write(&temp_path, json).map_err(|e| {
+        Diagnostic::new(
+            DiagnosticCode::Io,
+            format!("failed to write {}: {e}", temp_path.display()),
+        )
+    })?;
+    fs::rename(&temp_path, path).map_err(|e| {
         Diagnostic::new(
             DiagnosticCode::Io,
             format!("failed to write {}: {e}", path.display()),

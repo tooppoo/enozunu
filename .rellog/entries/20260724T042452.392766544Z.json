@@ -1,8 +1,0 @@
-{
-  "kind": "added",
-  "targets": [
-    "cli"
-  ],
-  "links": [],
-  "body": "add enozunu.lock.json: summon records resolved branch and tag commits and supports --update and --frozen"
-}

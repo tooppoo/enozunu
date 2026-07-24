@@ -9,7 +9,7 @@ use std::path::{Path, PathBuf};
 
 use enozunu::diagnostics::DiagnosticCode;
 use enozunu::git::{GitError, GitResolutionRequest, GitResolver, GitSelector, ResolvedSource};
-use enozunu::{ResolvedOrigin, run_materialize};
+use enozunu::{LockMode, ResolvedOrigin, run_materialize};
 
 const GIST_ID: &str = "2decf6c462d9b4418f2";
 const REVISION: &str = "468aac8caed5f0c3b859b8286968e2c78e2b8760";
@@ -147,7 +147,14 @@ fn materializes_a_gist_agent_via_the_git_transport_boundary() {
     let (_p, root) = project_with_agents(&[("shell-script-reviewer", "shell-script-reviewer.md")]);
     let transport = FakeTransport::ok(content);
 
-    let entries = run_materialize(&root.join("enozunu.kdl"), &root, &transport).unwrap();
+    let entries = run_materialize(
+        &root.join("enozunu.kdl"),
+        &root,
+        &transport,
+        LockMode::Locked,
+    )
+    .unwrap()
+    .entries;
 
     // The agent file is materialized to the Claude-native agent path.
     assert_eq!(
@@ -187,7 +194,14 @@ fn materializes_a_gist_skill_tree_from_the_revision_root() {
     let (_p, root) = project_with(&["semantic-line-breaks"], &[]);
     let transport = FakeTransport::ok(content);
 
-    let entries = run_materialize(&root.join("enozunu.kdl"), &root, &transport).unwrap();
+    let entries = run_materialize(
+        &root.join("enozunu.kdl"),
+        &root,
+        &transport,
+        LockMode::Locked,
+    )
+    .unwrap()
+    .entries;
 
     // The whole revision root, including nested supporting files, lands under the Claude-native skill path.
     assert_eq!(
@@ -218,7 +232,13 @@ fn records_typed_gist_provenance() {
     let (_p, root) = project_with_agents(&[("reviewer", "reviewer.md")]);
     let transport = FakeTransport::ok(content);
 
-    run_materialize(&root.join("enozunu.kdl"), &root, &transport).unwrap();
+    run_materialize(
+        &root.join("enozunu.kdl"),
+        &root,
+        &transport,
+        LockMode::Locked,
+    )
+    .unwrap();
 
     let record = provenance(&root);
     let source = &record["entries"][0]["source"];
@@ -237,7 +257,13 @@ fn records_skill_gist_provenance_without_a_file_key() {
     let (_p, root) = project_with(&["demo"], &[]);
     let transport = FakeTransport::ok(content);
 
-    run_materialize(&root.join("enozunu.kdl"), &root, &transport).unwrap();
+    run_materialize(
+        &root.join("enozunu.kdl"),
+        &root,
+        &transport,
+        LockMode::Locked,
+    )
+    .unwrap();
 
     let record = provenance(&root);
     let entry = &record["entries"][0];
@@ -258,7 +284,13 @@ fn deduplicates_one_checkout_across_files_of_the_same_revision() {
     let (_p, root) = project_with_agents(&[("agent-a", "a.md"), ("agent-b", "b.md")]);
     let transport = FakeTransport::ok(content);
 
-    run_materialize(&root.join("enozunu.kdl"), &root, &transport).unwrap();
+    run_materialize(
+        &root.join("enozunu.kdl"),
+        &root,
+        &transport,
+        LockMode::Locked,
+    )
+    .unwrap();
 
     // Two agents select different files from one `(id, revision)`, so the transport resolves it exactly once.
     assert_eq!(transport.requests.borrow().len(), 1);
@@ -278,7 +310,13 @@ fn deduplicates_one_resolution_across_a_skill_and_an_agent() {
     let (_p, root) = project_with(&["demo"], &[("reviewer", "reviewer.md")]);
     let transport = FakeTransport::ok(content);
 
-    run_materialize(&root.join("enozunu.kdl"), &root, &transport).unwrap();
+    run_materialize(
+        &root.join("enozunu.kdl"),
+        &root,
+        &transport,
+        LockMode::Locked,
+    )
+    .unwrap();
 
     // A Skill and an agent referencing the same `(id, revision)` share one resolution and one exported content tree.
     assert_eq!(transport.requests.borrow().len(), 1);
@@ -327,7 +365,13 @@ enozunu config-version=1 {
     fs::write(root.join("enozunu.kdl"), manifest).unwrap();
     let transport = FakeTransport::ok(content);
 
-    run_materialize(&root.join("enozunu.kdl"), &root, &transport).unwrap();
+    run_materialize(
+        &root.join("enozunu.kdl"),
+        &root,
+        &transport,
+        LockMode::Locked,
+    )
+    .unwrap();
 
     assert_eq!(transport.requests.borrow().len(), 1);
     assert!(root.join(".claude/skills/demo/SKILL.md").is_file());
@@ -340,7 +384,13 @@ fn rejects_a_missing_gist_file_with_source_path_not_found() {
     let (_p, root) = project_with_agents(&[("reviewer", "absent.md")]);
     let transport = FakeTransport::ok(content);
 
-    let diags = run_materialize(&root.join("enozunu.kdl"), &root, &transport).unwrap_err();
+    let diags = run_materialize(
+        &root.join("enozunu.kdl"),
+        &root,
+        &transport,
+        LockMode::Locked,
+    )
+    .unwrap_err();
 
     assert!(
         diags
@@ -356,7 +406,13 @@ fn rejects_a_gist_skill_root_without_skill_md() {
     let (_p, root) = project_with(&["demo"], &[]);
     let transport = FakeTransport::ok(content);
 
-    let diags = run_materialize(&root.join("enozunu.kdl"), &root, &transport).unwrap_err();
+    let diags = run_materialize(
+        &root.join("enozunu.kdl"),
+        &root,
+        &transport,
+        LockMode::Locked,
+    )
+    .unwrap_err();
 
     assert!(
         diags
@@ -378,7 +434,13 @@ fn rejects_a_symlink_inside_a_gist_skill_tree() {
     let (_p, root) = project_with(&["demo"], &[]);
     let transport = FakeTransport::ok(content);
 
-    let diags = run_materialize(&root.join("enozunu.kdl"), &root, &transport).unwrap_err();
+    let diags = run_materialize(
+        &root.join("enozunu.kdl"),
+        &root,
+        &transport,
+        LockMode::Locked,
+    )
+    .unwrap_err();
 
     assert!(diags.iter().any(|d| d.code == DiagnosticCode::UnsafePath));
     assert!(!root.join(".claude").exists());
@@ -389,7 +451,13 @@ fn propagates_a_gist_fetch_failure() {
     let (_p, root) = project_with_agents(&[("reviewer", "reviewer.md")]);
     let transport = FakeTransport::failing(GitError::Fetch("unreachable".to_owned()));
 
-    let diags = run_materialize(&root.join("enozunu.kdl"), &root, &transport).unwrap_err();
+    let diags = run_materialize(
+        &root.join("enozunu.kdl"),
+        &root,
+        &transport,
+        LockMode::Locked,
+    )
+    .unwrap_err();
 
     // A Gist transport failure is classified as GistFetch, never GitResolution.
     assert!(diags.iter().any(|d| d.code == DiagnosticCode::GistFetch));
@@ -405,7 +473,13 @@ fn propagates_a_gist_fetch_failure_for_a_skill() {
     let (_p, root) = project_with(&["demo"], &[]);
     let transport = FakeTransport::failing(GitError::Fetch("unreachable".to_owned()));
 
-    let diags = run_materialize(&root.join("enozunu.kdl"), &root, &transport).unwrap_err();
+    let diags = run_materialize(
+        &root.join("enozunu.kdl"),
+        &root,
+        &transport,
+        LockMode::Locked,
+    )
+    .unwrap_err();
 
     assert!(diags.iter().any(|d| d.code == DiagnosticCode::GistFetch));
     assert!(!root.join(".claude").exists());
@@ -416,7 +490,13 @@ fn propagates_a_gist_revision_not_found_failure() {
     let (_p, root) = project_with_agents(&[("reviewer", "reviewer.md")]);
     let transport = FakeTransport::failing(GitError::RevisionNotFound("absent".to_owned()));
 
-    let diags = run_materialize(&root.join("enozunu.kdl"), &root, &transport).unwrap_err();
+    let diags = run_materialize(
+        &root.join("enozunu.kdl"),
+        &root,
+        &transport,
+        LockMode::Locked,
+    )
+    .unwrap_err();
 
     assert!(
         diags
@@ -433,7 +513,13 @@ fn rejects_a_gist_file_that_is_not_a_regular_file() {
     let (_p, root) = project_with_agents(&[("reviewer", "a-directory")]);
     let transport = FakeTransport::ok(content);
 
-    let diags = run_materialize(&root.join("enozunu.kdl"), &root, &transport).unwrap_err();
+    let diags = run_materialize(
+        &root.join("enozunu.kdl"),
+        &root,
+        &transport,
+        LockMode::Locked,
+    )
+    .unwrap_err();
 
     assert!(
         diags
@@ -453,7 +539,13 @@ fn accepts_a_gist_file_symlinked_to_a_regular_file_inside_the_checkout() {
     let (_p, root) = project_with_agents(&[("reviewer", "link.md")]);
     let transport = FakeTransport::ok(content);
 
-    run_materialize(&root.join("enozunu.kdl"), &root, &transport).unwrap();
+    run_materialize(
+        &root.join("enozunu.kdl"),
+        &root,
+        &transport,
+        LockMode::Locked,
+    )
+    .unwrap();
 
     assert_eq!(
         fs::read_to_string(root.join(".claude/agents/reviewer.md")).unwrap(),
@@ -473,7 +565,13 @@ fn rejects_a_gist_file_symlink_that_escapes_the_checkout() {
     let (_p, root) = project_with_agents(&[("reviewer", "escape.md")]);
     let transport = FakeTransport::ok(content);
 
-    let diags = run_materialize(&root.join("enozunu.kdl"), &root, &transport).unwrap_err();
+    let diags = run_materialize(
+        &root.join("enozunu.kdl"),
+        &root,
+        &transport,
+        LockMode::Locked,
+    )
+    .unwrap_err();
 
     assert!(diags.iter().any(|d| d.code == DiagnosticCode::UnsafePath));
     assert!(!root.join(".claude").exists());

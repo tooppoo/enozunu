@@ -1,22 +1,23 @@
 //! Enozunu materializes declared AI-agent configuration sources into target AI-native paths.
 //!
-//! The pipeline is: parse and validate the manifest, plan target paths, resolve Git and local sources, check every artifact, then write outputs and the provenance record.
+//! The pipeline is: parse and validate the manifest, plan target paths, resolve Git and local sources, check every artifact, then write outputs, the provenance record, and the lock file.
 
 pub mod diagnostics;
 pub mod gist;
 pub mod git;
 pub mod init;
+pub mod lock;
 pub mod manifest;
 pub mod materialize;
 pub mod plan;
 pub mod provenance;
 
-use std::collections::HashMap;
-use std::path::Path;
+use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
 
 use diagnostics::{Diagnostic, DiagnosticCode};
 use gist::{GistRequest, GistResolver, GitTransportGistResolver};
-use git::{GitError, GitResolutionRequest, GitResolver, GitSelector, ResolvedSource};
+use git::{CommitSha, GitError, GitResolutionRequest, GitResolver, GitSelector, ResolvedSource};
 use manifest::{GistArtifactSelector, SourceReference, TargetAi};
 use plan::PlannedMaterialization;
 use provenance::{ProvenanceEntry, ProvenanceGitSelector, ProvenanceRecord, ProvenanceSource};
@@ -57,6 +58,39 @@ pub struct MaterializedEntry {
     pub target_rel_path: String,
 }
 
+/// How one run treats the lock file.
+///
+/// `Locked` is the default: reproducibility is opt-out, not opt-in, so a plain `summon` never
+/// silently follows a moved branch or tag once a revision is recorded.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LockMode {
+    /// Resolve mutable selectors from recorded revisions when present; resolve and record anything missing.
+    Locked,
+    /// Ignore recorded revisions, re-resolve every mutable selector, and rewrite the lock file.
+    Update,
+    /// Resolve strictly from the lock file and never write it; fail when any mutable source is unlocked.
+    Frozen,
+}
+
+/// What this run did to the lock file, reported so the CLI announces only real file changes.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LockOutcome {
+    Created,
+    Updated,
+    Unchanged,
+    /// Frozen mode reads the lock as an input and must leave it untouched.
+    NotWritten,
+}
+
+/// The full result of one materialization run.
+#[derive(Debug)]
+pub struct MaterializeOutcome {
+    pub entries: Vec<MaterializedEntry>,
+    pub lock: LockOutcome,
+    /// Where the lock file lives for this run, so the CLI reports the same path the pipeline used.
+    pub lock_path: PathBuf,
+}
+
 /// Loads and validates the manifest at `manifest_path`.
 pub fn load_manifest(manifest_path: &Path) -> Result<manifest::Manifest, Vec<Diagnostic>> {
     let text = std::fs::read_to_string(manifest_path).map_err(|e| {
@@ -68,14 +102,15 @@ pub fn load_manifest(manifest_path: &Path) -> Result<manifest::Manifest, Vec<Dia
     manifest::parse(&text)
 }
 
-/// Runs the full materialization pipeline and writes the provenance record.
+/// Runs the full materialization pipeline and writes the provenance record and the lock file.
 ///
 /// All sources are resolved and all artifacts are checked before the first target write, so a failing entry does not leave the project half-updated.
 pub fn run_materialize(
     manifest_path: &Path,
     project_root: &Path,
     resolver: &dyn GitResolver,
-) -> Result<Vec<MaterializedEntry>, Vec<Diagnostic>> {
+    lock_mode: LockMode,
+) -> Result<MaterializeOutcome, Vec<Diagnostic>> {
     let manifest = load_manifest(manifest_path)?;
     let planned = plan::plan(&manifest)?;
 
@@ -85,7 +120,26 @@ pub fn run_materialize(
         _ => Path::new("."),
     };
 
-    let resolved = resolve_git_sources(&planned, resolver)?;
+    // A corrupt or unsupported lock file fails every mode, including `Update`: silently rebuilding
+    // over a record the user may have meant to keep would destroy the pinned revisions it held.
+    let lock_path = manifest_dir.join(lock::LOCK_FILE_NAME);
+    let lock_record = lock::read(&lock_path).map_err(|d| vec![d])?;
+    let locked = match lock_mode {
+        LockMode::Update => HashMap::new(),
+        LockMode::Locked | LockMode::Frozen => lock_record
+            .as_ref()
+            .map(lock::locked_revisions)
+            .unwrap_or_default(),
+    };
+
+    if lock_mode == LockMode::Frozen {
+        let diags = frozen_lock_diagnostics(&planned, lock_record.is_some(), &lock_path, &locked);
+        if !diags.is_empty() {
+            return Err(diags);
+        }
+    }
+
+    let resolved = resolve_git_sources(&planned, resolver, &locked)?;
     // Gist sources resolve over the same Git transport, but through the Gist boundary so failures carry Gist-specific diagnostic codes.
     let gist_resolver = GitTransportGistResolver::new(resolver);
     let resolved_gists = resolve_gist_sources(&planned, &gist_resolver)?;
@@ -160,7 +214,71 @@ pub fn run_materialize(
     )
     .map_err(|d| vec![d])?;
 
-    Ok(results)
+    let lock_outcome = match lock_mode {
+        LockMode::Frozen => LockOutcome::NotWritten,
+        LockMode::Locked | LockMode::Update => {
+            let record = lock::build(&resolved).map_err(|d| vec![d])?;
+            match lock::write(&lock_path, &record).map_err(|d| vec![d])? {
+                lock::WriteOutcome::Created => LockOutcome::Created,
+                lock::WriteOutcome::Updated => LockOutcome::Updated,
+                lock::WriteOutcome::Unchanged => LockOutcome::Unchanged,
+            }
+        }
+    };
+
+    Ok(MaterializeOutcome {
+        entries: results,
+        lock: lock_outcome,
+        lock_path,
+    })
+}
+
+/// Collects every mutable Git source that frozen mode cannot resolve from the lock file.
+///
+/// All gaps are gathered before failing — matching how manifest validation reports evidence — so
+/// one frozen run names every source that needs locking instead of failing one source at a time.
+/// The check runs before any resolution, keeping a frozen failure free of network side effects.
+fn frozen_lock_diagnostics(
+    planned: &[PlannedMaterialization],
+    lock_file_exists: bool,
+    lock_path: &Path,
+    locked: &HashMap<(String, GitSelector), CommitSha>,
+) -> Vec<Diagnostic> {
+    let mut diags = Vec::new();
+    let mut seen = HashSet::new();
+    for entry in planned {
+        let SourceReference::Git { url, selector, .. } = &entry.reference else {
+            continue;
+        };
+        let (kind, value) = match selector {
+            GitSelector::Branch(branch) => ("branch", branch),
+            GitSelector::Tag(tag) => ("tag", tag),
+            GitSelector::Revision(_) => continue,
+        };
+        let key = (url.clone(), selector.clone());
+        if locked.contains_key(&key) || !seen.insert(key) {
+            continue;
+        }
+        if !lock_file_exists {
+            // Without a lock file every mutable source is unlocked; one report of the missing file
+            // says more than repeating the same cause per source.
+            return vec![Diagnostic::new(
+                DiagnosticCode::LockOutOfDate,
+                format!(
+                    "cannot materialize with --frozen: {} not found; run `enozunu summon` to create it",
+                    lock_path.display()
+                ),
+            )];
+        }
+        diags.push(Diagnostic::new(
+            DiagnosticCode::LockOutOfDate,
+            format!(
+                "cannot materialize with --frozen: source `{url}` ({kind} `{value}`) has no entry in {}; run `enozunu summon` to lock it",
+                lock_path.display()
+            ),
+        ));
+    }
+    diags
 }
 
 fn provenance_source(reference: &SourceReference, origin: &ResolvedOrigin) -> ProvenanceSource {
@@ -218,9 +336,15 @@ fn gist_key(id: &manifest::GistId, revision: &git::CommitSha) -> (String, String
 ///
 /// The selector — kind and value — is part of the key, so a branch whose name looks like a commit id never shares a resolution with a revision of the same text, and a branch never shares one with a tag of the same name.
 /// Local and Gist references are skipped here: local paths are checked directly against the filesystem, and Gist sources resolve through the Gist boundary.
+///
+/// A `locked` hit swaps the request selector for the recorded revision while the result stays keyed
+/// by the declared selector, so callers and provenance keep addressing sources by what the manifest
+/// says. Resolving through the revision path also re-verifies that the materialized commit equals
+/// the recorded one, so a locked revision is checked, not trusted.
 fn resolve_git_sources(
     planned: &[PlannedMaterialization],
     resolver: &dyn GitResolver,
+    locked: &HashMap<(String, GitSelector), CommitSha>,
 ) -> Result<HashMap<(String, GitSelector), ResolvedSource>, Vec<Diagnostic>> {
     let mut resolved = HashMap::new();
     let mut diags = Vec::new();
@@ -232,15 +356,30 @@ fn resolve_git_sources(
         if resolved.contains_key(&key) {
             continue;
         }
+        let locked_revision = locked.get(&key);
         let request = GitResolutionRequest {
             url: url.clone(),
-            selector: selector.clone(),
+            selector: match locked_revision {
+                Some(revision) => GitSelector::Revision(revision.clone()),
+                None => selector.clone(),
+            },
         };
         match resolver.resolve(&request) {
             Ok(source) => {
                 resolved.insert(key, source);
             }
-            Err(e) => diags.push(git_error_diagnostic(e)),
+            Err(e) => diags.push(match (locked_revision, e) {
+                // A recorded revision can vanish upstream (force-push plus pruning); the declared
+                // selector alone cannot say so, so the report points at the lock as the cause and
+                // names the way out.
+                (Some(_), GitError::RevisionNotFound(message)) => Diagnostic::new(
+                    DiagnosticCode::GitResolution,
+                    format!(
+                        "{message}; the locked revision may no longer exist upstream; run `enozunu summon --update` to re-resolve it"
+                    ),
+                ),
+                (_, e) => git_error_diagnostic(e),
+            }),
         }
     }
     if diags.is_empty() {

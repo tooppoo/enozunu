@@ -1,0 +1,8 @@
+{
+  "kind": "changed",
+  "targets": [
+    "cli"
+  ],
+  "links": [],
+  "body": "summon resolves locked branch and tag sources from enozunu.lock.json by default instead of following the ref"
+}

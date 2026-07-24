@@ -23,8 +23,7 @@ The supported target AIs are Claude and Codex. Enozunu materializes into each ta
 
 ## Declarations, Not Runtime Semantics
 
-Enozunu manages where configuration comes from
-and where it is materialized.
+Enozunu manages where configuration comes from and where it is materialized.
 
 It does not certify what the target AI will do with the generated files.
 It does not promise that a Skill or agent reused across target AIs will behave the same way.
@@ -67,25 +66,24 @@ KDL   -> human-authored configuration
 JSON  -> machine-generated records
 ```
 
-In v0.0.x:
+The files:
 
 ```text
 enozunu.kdl                 # human-authored configuration
+enozunu.lock.json           # machine-generated resolution input
 .enozunu/provenance.json    # machine-generated derived record
 ```
 
-## Reproducibility Is Deferred
+## Reproducibility Through the Lock File
 
-v0.0.x supports branch selectors first.
-This makes early dogfooding easier while Skill and agent sources change frequently.
+Branch and tag selectors are mutable refs, and early versions simply followed them: v0.0.x supported branch selectors first to make dogfooding easy while sources changed frequently, and deliberately did not guarantee exact reproducibility.
 
-Branch selectors are mutable.
-Therefore v0.0.x does not guarantee exact reproducibility.
+Since v0.1.x, `enozunu.lock.json` freezes what each mutable selector resolved to.
+A default `enozunu summon` materializes the recorded commits; `summon --update` is the explicit step that follows moved refs and rewrites the lock.
+An exact `revision` selector still pins a single source in the manifest itself, without a lock entry.
 
-A Git source may also select a tag, which reads more like a release than a branch name does.
-A tag is still a mutable ref that a remote can move or delete, so it carries the same reproducibility position as a branch.
-
-A Git source may instead pin an exact revision, which materializes the same commit on every run.
-Pinning is per source; it does not freeze a whole run.
-
-At materialization time, Enozunu records the resolved commit in `.enozunu/provenance.json`. That record is provenance, not a lockfile. Whole-run reproducibility guarantees such as lockfiles are future work.
+Each file keeps one role.
+`enozunu.kdl` is human-authored intent.
+`enozunu.lock.json` is the machine-written resolution input.
+`.enozunu/provenance.json` records what the last run actually materialized; it is provenance, not a lockfile, and it is never read back as a resolution input.
+The decision and its alternatives are recorded in [the lockfile ADR](adr/20260724T021001Z_lockfile-based-reproducibility.md).

@@ -51,6 +51,12 @@ pub enum DiagnosticCode {
     DuplicateTargetPath,
     /// Resolving a Git source failed.
     GitResolution,
+    /// The lock file exists but is not valid JSON, does not match the expected shape, or records a non-canonical revision.
+    LockParse,
+    /// The lock file declares a `version` this build does not support.
+    UnsupportedLockVersion,
+    /// Frozen materialization requires an up-to-date lock file, and it is missing or lacks an entry for a mutable source.
+    LockOutOfDate,
     /// A Gist remote could not be fetched. Distinct from `GitResolution` so Gist transport failures are classified as Gist failures even though Git transport is used internally.
     GistFetch,
     /// The pinned Gist revision does not exist in the fetched Gist.
@@ -80,6 +86,9 @@ impl DiagnosticCode {
             DiagnosticCode::InvalidRevision => "invalid-revision",
             DiagnosticCode::DuplicateTargetPath => "duplicate-target-path",
             DiagnosticCode::GitResolution => "git-resolution",
+            DiagnosticCode::LockParse => "lock-parse",
+            DiagnosticCode::UnsupportedLockVersion => "unsupported-lock-version",
+            DiagnosticCode::LockOutOfDate => "lock-out-of-date",
             DiagnosticCode::GistFetch => "gist-fetch",
             DiagnosticCode::GistRevisionNotFound => "gist-revision-not-found",
             DiagnosticCode::SourcePathNotFound => "source-path-not-found",
@@ -126,6 +135,12 @@ mod tests {
             (DiagnosticCode::InvalidRevision, "invalid-revision"),
             (DiagnosticCode::DuplicateTargetPath, "duplicate-target-path"),
             (DiagnosticCode::GitResolution, "git-resolution"),
+            (DiagnosticCode::LockParse, "lock-parse"),
+            (
+                DiagnosticCode::UnsupportedLockVersion,
+                "unsupported-lock-version",
+            ),
+            (DiagnosticCode::LockOutOfDate, "lock-out-of-date"),
             (DiagnosticCode::GistFetch, "gist-fetch"),
             (
                 DiagnosticCode::GistRevisionNotFound,

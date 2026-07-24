@@ -1,0 +1,654 @@
+document file {
+  title "summon lockfile behavior"
+  description ```
+    `enozunu summon` locks mutable Git selectors in enozunu.lock.json and
+    resolves from that record on later runs.
+
+    Each case builds a local repository inside the case workspace and points
+    the manifest at it with a `file://` URL, so the real resolver runs while
+    the run stays offline and deterministic. `before_each` provides the shared
+    fixture files: a skill source tree and a single-branch-source manifest
+    written with a `SOURCE_URL` placeholder, substituted by a shell step
+    because the workspace path is only known at run time. Cases that need a
+    different manifest replace the shared one explicitly with `rm` + `write`.
+
+    The lock-first cases give the branch tip different content from the locked
+    commit, so a case cannot pass by accidentally re-resolving the branch
+    head. Run-time commit ids are asserted through shell `grep` steps because
+    the expected id is only known once the fixture repository exists.
+
+    Repository-mutating git steps run with `GIT_CONFIG_GLOBAL=/dev/null
+    GIT_CONFIG_NOSYSTEM=1` so ambient developer configuration — commit signing
+    above all — cannot make the fixture fail to build outside CI.
+    ```
+}
+
+before_each {
+  write <"source-repo/skills/demo-skill/SKILL.md"> ```
+    ---
+    name: demo-skill
+    description: demo skill resolved over git transport
+    ---
+
+    # Demo Skill OLD
+    ```
+  write <"enozunu.kdl"> ```
+    enozunu config-version=1 {
+      provider {
+        skills {
+          skill "demo-skill" {
+            git {
+              url "SOURCE_URL"
+              branch "main"
+              path "skills/demo-skill"
+            }
+          }
+        }
+      }
+      consumer {
+        claude {
+          use-skills "demo-skill"
+        }
+      }
+    }
+    ```
+}
+
+case "summon creates the lock file and records the resolved branch commit" {
+  $ GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 git init --quiet --initial-branch main source-repo
+  $ git -C source-repo config user.email "e2e@example.com"
+  $ git -C source-repo config user.name "e2e"
+  $ GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 git -C source-repo add --all
+  $ GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 git -C source-repo commit --quiet -m old
+  $ sed -i "s|SOURCE_URL|file://$PWD/source-repo|" enozunu.kdl
+  $ enozunu summon
+  assert {
+    exit 0
+    stdout contains "created enozunu.lock.json"
+    file <"enozunu.lock.json"> contains "\"version\": 1"
+    file <"enozunu.lock.json"> contains "\"type\": \"branch\""
+    file <"enozunu.lock.json"> contains "\"value\": \"main\""
+  }
+  # The recorded revision is the resolved branch head. Asserted through a shell
+  # step because the expected id is only known at run time.
+  $ head=$(git -C source-repo rev-parse main) && grep -q "\"resolved_revision\": \"$head\"" enozunu.lock.json
+  assert {
+    exit 0
+  }
+}
+
+case "a second summon stays on the locked commit while the branch advances" {
+  $ GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 git init --quiet --initial-branch main source-repo
+  $ git -C source-repo config user.email "e2e@example.com"
+  $ git -C source-repo config user.name "e2e"
+  $ GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 git -C source-repo add --all
+  $ GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 git -C source-repo commit --quiet -m old
+  $ sed -i "s|SOURCE_URL|file://$PWD/source-repo|" enozunu.kdl
+  # First run locks the current head.
+  $ enozunu summon
+  assert {
+    exit 0
+    file <".claude/skills/demo-skill/SKILL.md"> contains "Demo Skill OLD"
+  }
+  # Advance the branch so the head no longer matches the locked commit.
+  $ sed -i 's/Demo Skill OLD/Demo Skill NEW/' source-repo/skills/demo-skill/SKILL.md
+  $ GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 git -C source-repo commit --quiet -am new
+  $ enozunu summon
+  assert {
+    exit 0
+    # The branch moved, but the default run materializes the locked commit and
+    # leaves the lock file alone.
+    file <".claude/skills/demo-skill/SKILL.md"> contains "Demo Skill OLD"
+    not {
+      file <".claude/skills/demo-skill/SKILL.md"> contains "Demo Skill NEW"
+    }
+    not {
+      stdout contains "updated enozunu.lock.json"
+    }
+  }
+  # Provenance reports the locked commit — the pre-advance head — as what this
+  # run actually materialized.
+  $ locked=$(git -C source-repo rev-parse main~1) && grep -q "\"resolved_revision\": \"$locked\"" .enozunu/provenance.json
+  assert {
+    exit 0
+  }
+}
+
+case "summon --update follows the branch and rewrites the lock" {
+  $ GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 git init --quiet --initial-branch main source-repo
+  $ git -C source-repo config user.email "e2e@example.com"
+  $ git -C source-repo config user.name "e2e"
+  $ GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 git -C source-repo add --all
+  $ GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 git -C source-repo commit --quiet -m old
+  $ sed -i "s|SOURCE_URL|file://$PWD/source-repo|" enozunu.kdl
+  $ enozunu summon
+  assert {
+    exit 0
+    file <".claude/skills/demo-skill/SKILL.md"> contains "Demo Skill OLD"
+  }
+  $ sed -i 's/Demo Skill OLD/Demo Skill NEW/' source-repo/skills/demo-skill/SKILL.md
+  $ GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 git -C source-repo commit --quiet -am new
+  $ enozunu summon --update
+  assert {
+    exit 0
+    stdout contains "updated enozunu.lock.json"
+    # An update run re-resolves the branch, so the new head wins.
+    file <".claude/skills/demo-skill/SKILL.md"> contains "Demo Skill NEW"
+    not {
+      file <".claude/skills/demo-skill/SKILL.md"> contains "Demo Skill OLD"
+    }
+  }
+  # The rewritten lock records the advanced head.
+  $ head=$(git -C source-repo rev-parse main) && grep -q "\"resolved_revision\": \"$head\"" enozunu.lock.json
+  assert {
+    exit 0
+  }
+}
+
+case "summon locks only mutable git sources" {
+  $ GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 git init --quiet --initial-branch main source-repo
+  $ git -C source-repo config user.email "e2e@example.com"
+  $ git -C source-repo config user.name "e2e"
+  $ GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 git -C source-repo add --all
+  $ GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 git -C source-repo commit --quiet -m only
+  $ GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 git -C source-repo tag v1.0.0
+  # This case covers every source kind at once, so it replaces the shared
+  # single-source manifest.
+  $ rm enozunu.kdl
+  write <"enozunu.kdl"> ```
+    enozunu config-version=1 {
+      provider {
+        skills {
+          skill "demo-skill" {
+            git {
+              url "SOURCE_URL"
+              branch "main"
+              path "skills/demo-skill"
+            }
+          }
+          skill "skill-tag" {
+            git {
+              url "SOURCE_URL"
+              tag "v1.0.0"
+              path "skills/demo-skill"
+            }
+          }
+          skill "skill-rev" {
+            git {
+              url "SOURCE_URL"
+              revision "PINNED_REVISION"
+              path "skills/demo-skill"
+            }
+          }
+          skill "local-skill" {
+            local {
+              path "local-src/skills/local-skill"
+            }
+          }
+        }
+      }
+      consumer {
+        claude {
+          use-skills "demo-skill" "skill-tag" "skill-rev" "local-skill"
+        }
+      }
+    }
+    ```
+  write <"local-src/skills/local-skill/SKILL.md"> ```
+    ---
+    name: local-skill
+    description: local skill fixture
+    ---
+
+    # Local Skill
+    ```
+  $ sed -i "s|SOURCE_URL|file://$PWD/source-repo|g" enozunu.kdl
+  $ pinned=$(git -C source-repo rev-parse main) && sed -i "s/PINNED_REVISION/$pinned/" enozunu.kdl
+  $ enozunu summon
+  assert {
+    exit 0
+    # Only the branch and tag selectors are locked; the revision pin and the
+    # local source stay out.
+    file <"enozunu.lock.json"> contains "\"type\": \"branch\""
+    file <"enozunu.lock.json"> contains "\"type\": \"tag\""
+    not {
+      file <"enozunu.lock.json"> contains "\"type\": \"revision\""
+    }
+    not {
+      file <"enozunu.lock.json"> contains "local"
+    }
+  }
+}
+
+case "a manifest without mutable sources writes an empty lock" {
+  $ rm enozunu.kdl
+  write <"enozunu.kdl"> ```
+    enozunu config-version=1 {
+      provider {
+        skills {
+          skill "local-skill" {
+            local {
+              path "local-src/skills/local-skill"
+            }
+          }
+        }
+      }
+      consumer {
+        claude {
+          use-skills "local-skill"
+        }
+      }
+    }
+    ```
+  write <"local-src/skills/local-skill/SKILL.md"> ```
+    ---
+    name: local-skill
+    description: local skill fixture
+    ---
+
+    # Local Skill
+    ```
+  $ enozunu summon
+  assert {
+    exit 0
+    # The lock is written uniformly, so a later frozen run has a record to
+    # check against.
+    stdout contains "created enozunu.lock.json"
+    file <"enozunu.lock.json"> contains "\"entries\": []"
+  }
+}
+
+case "removing a source prunes its lock entry" {
+  $ GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 git init --quiet --initial-branch main source-repo
+  $ git -C source-repo config user.email "e2e@example.com"
+  $ git -C source-repo config user.name "e2e"
+  $ GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 git -C source-repo add --all
+  $ GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 git -C source-repo commit --quiet -m only
+  $ GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 git -C source-repo branch other
+  $ rm enozunu.kdl
+  write <"enozunu.kdl"> ```
+    enozunu config-version=1 {
+      provider {
+        skills {
+          skill "skill-main" {
+            git {
+              url "SOURCE_URL"
+              branch "main"
+              path "skills/demo-skill"
+            }
+          }
+          skill "skill-other" {
+            git {
+              url "SOURCE_URL"
+              branch "other"
+              path "skills/demo-skill"
+            }
+          }
+        }
+      }
+      consumer {
+        claude {
+          use-skills "skill-main" "skill-other"
+        }
+      }
+    }
+    ```
+  $ sed -i "s|SOURCE_URL|file://$PWD/source-repo|g" enozunu.kdl
+  $ enozunu summon
+  assert {
+    exit 0
+    file <"enozunu.lock.json"> contains "\"value\": \"other\""
+  }
+  # Drop the `other` source; the next run rebuilds the lock from what actually
+  # resolves, so the removed source's entry disappears.
+  $ rm enozunu.kdl
+  write <"enozunu.kdl"> ```
+    enozunu config-version=1 {
+      provider {
+        skills {
+          skill "skill-main" {
+            git {
+              url "SOURCE_URL"
+              branch "main"
+              path "skills/demo-skill"
+            }
+          }
+        }
+      }
+      consumer {
+        claude {
+          use-skills "skill-main"
+        }
+      }
+    }
+    ```
+  $ sed -i "s|SOURCE_URL|file://$PWD/source-repo|" enozunu.kdl
+  $ enozunu summon
+  assert {
+    exit 0
+    stdout contains "updated enozunu.lock.json"
+    file <"enozunu.lock.json"> contains "\"value\": \"main\""
+    not {
+      file <"enozunu.lock.json"> contains "\"value\": \"other\""
+    }
+  }
+}
+
+case "changing a selector resolves fresh and replaces the lock entry" {
+  $ GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 git init --quiet --initial-branch main source-repo
+  $ git -C source-repo config user.email "e2e@example.com"
+  $ git -C source-repo config user.name "e2e"
+  $ GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 git -C source-repo add --all
+  $ GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 git -C source-repo commit --quiet -m old
+  $ sed -i "s|SOURCE_URL|file://$PWD/source-repo|" enozunu.kdl
+  $ enozunu summon
+  assert {
+    exit 0
+  }
+  # Diverge a second branch after locking `main`, then repoint the manifest at
+  # it by replacing the shared manifest.
+  $ GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 git -C source-repo checkout --quiet -b other
+  $ sed -i 's/Demo Skill OLD/Demo Skill OTHER/' source-repo/skills/demo-skill/SKILL.md
+  $ GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 git -C source-repo commit --quiet -am other
+  $ GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 git -C source-repo checkout --quiet main
+  $ rm enozunu.kdl
+  write <"enozunu.kdl"> ```
+    enozunu config-version=1 {
+      provider {
+        skills {
+          skill "demo-skill" {
+            git {
+              url "SOURCE_URL"
+              branch "other"
+              path "skills/demo-skill"
+            }
+          }
+        }
+      }
+      consumer {
+        claude {
+          use-skills "demo-skill"
+        }
+      }
+    }
+    ```
+  $ sed -i "s|SOURCE_URL|file://$PWD/source-repo|" enozunu.kdl
+  $ enozunu summon
+  assert {
+    exit 0
+    # The new selector has no lock entry, so it resolves fresh even in the
+    # default mode, and the old selector's entry is gone.
+    file <".claude/skills/demo-skill/SKILL.md"> contains "Demo Skill OTHER"
+    file <"enozunu.lock.json"> contains "\"value\": \"other\""
+    not {
+      file <"enozunu.lock.json"> contains "\"value\": \"main\""
+    }
+  }
+}
+
+case "follows tag moves across runs with update" {
+  $ GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 git init --quiet --initial-branch main source-repo
+  $ git -C source-repo config user.email "e2e@example.com"
+  $ git -C source-repo config user.name "e2e"
+  $ GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 git -C source-repo add --all
+  $ GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 git -C source-repo commit --quiet -m old
+  $ GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 git -C source-repo tag v1.0.0
+  $ rm enozunu.kdl
+  write <"enozunu.kdl"> ```
+    enozunu config-version=1 {
+      provider {
+        skills {
+          skill "demo-skill" {
+            git {
+              url "SOURCE_URL"
+              tag "v1.0.0"
+              path "skills/demo-skill"
+            }
+          }
+        }
+      }
+      consumer {
+        claude {
+          use-skills "demo-skill"
+        }
+      }
+    }
+    ```
+  $ sed -i "s|SOURCE_URL|file://$PWD/source-repo|" enozunu.kdl
+  $ enozunu summon
+  assert {
+    exit 0
+    file <".claude/skills/demo-skill/SKILL.md"> contains "Demo Skill OLD"
+  }
+  # Force-move the tag to a new commit. The default run holds the recorded
+  # commit; following a moved tag is an explicit update decision.
+  $ sed -i 's/Demo Skill OLD/Demo Skill NEW/' source-repo/skills/demo-skill/SKILL.md
+  $ GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 git -C source-repo commit --quiet -am new
+  $ GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 git -C source-repo tag --force v1.0.0
+  $ enozunu summon
+  assert {
+    exit 0
+    file <".claude/skills/demo-skill/SKILL.md"> contains "Demo Skill OLD"
+  }
+  $ enozunu summon --update
+  assert {
+    exit 0
+    file <".claude/skills/demo-skill/SKILL.md"> contains "Demo Skill NEW"
+  }
+}
+
+case "summon --frozen fails when the lock file is missing" {
+  $ GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 git init --quiet --initial-branch main source-repo
+  $ git -C source-repo config user.email "e2e@example.com"
+  $ git -C source-repo config user.name "e2e"
+  $ GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 git -C source-repo add --all
+  $ GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 git -C source-repo commit --quiet -m only
+  $ sed -i "s|SOURCE_URL|file://$PWD/source-repo|" enozunu.kdl
+  # Positive control: the fixture repository exists and the manifest points at
+  # it, so the failure below can only come from the missing lock file.
+  $ git -C source-repo rev-parse HEAD
+  assert {
+    exit 0
+    not {
+      file <"enozunu.kdl"> contains "SOURCE_URL"
+    }
+  }
+  $ enozunu summon --frozen
+  assert {
+    exit 1
+    stderr contains "lock-out-of-date"
+    # A failed frozen run materializes nothing and never creates the lock it
+    # reported missing.
+    not {
+      dir <".claude"> exists
+    }
+    not {
+      file <"enozunu.lock.json"> exists
+    }
+  }
+}
+
+case "summon --frozen fails without a lock file even without mutable sources" {
+  $ rm enozunu.kdl
+  write <"enozunu.kdl"> ```
+    enozunu config-version=1 {
+      provider {
+        skills {
+          skill "local-skill" {
+            local {
+              path "local-src/skills/local-skill"
+            }
+          }
+        }
+      }
+      consumer {
+        claude {
+          use-skills "local-skill"
+        }
+      }
+    }
+    ```
+  write <"local-src/skills/local-skill/SKILL.md"> ```
+    ---
+    name: local-skill
+    description: local skill fixture
+    ---
+
+    # Local Skill
+    ```
+  # A missing lock always means it was never created or committed, so frozen
+  # mode fails even though nothing in this manifest is mutable.
+  $ enozunu summon --frozen
+  assert {
+    exit 1
+    stderr contains "lock-out-of-date"
+  }
+  # Once a normal run has written the (empty) lock, the same frozen run passes.
+  $ enozunu summon
+  assert {
+    exit 0
+  }
+  $ enozunu summon --frozen
+  assert {
+    exit 0
+  }
+}
+
+case "summon --frozen fails when a mutable source is unlocked" {
+  $ GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 git init --quiet --initial-branch main source-repo
+  $ git -C source-repo config user.email "e2e@example.com"
+  $ git -C source-repo config user.name "e2e"
+  $ GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 git -C source-repo add --all
+  $ GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 git -C source-repo commit --quiet -m only
+  $ sed -i "s|SOURCE_URL|file://$PWD/source-repo|" enozunu.kdl
+  $ enozunu summon
+  assert {
+    exit 0
+  }
+  # A second branch source enters the manifest after the lock was written.
+  $ GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 git -C source-repo branch other
+  $ rm enozunu.kdl
+  write <"enozunu.kdl"> ```
+    enozunu config-version=1 {
+      provider {
+        skills {
+          skill "demo-skill" {
+            git {
+              url "SOURCE_URL"
+              branch "main"
+              path "skills/demo-skill"
+            }
+          }
+          skill "skill-other" {
+            git {
+              url "SOURCE_URL"
+              branch "other"
+              path "skills/demo-skill"
+            }
+          }
+        }
+      }
+      consumer {
+        claude {
+          use-skills "demo-skill" "skill-other"
+        }
+      }
+    }
+    ```
+  $ sed -i "s|SOURCE_URL|file://$PWD/source-repo|g" enozunu.kdl
+  $ enozunu summon --frozen
+  assert {
+    exit 1
+    stderr contains "lock-out-of-date"
+    stderr contains "has no entry"
+  }
+}
+
+case "summon --frozen materializes from the lock without writing it" {
+  $ GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 git init --quiet --initial-branch main source-repo
+  $ git -C source-repo config user.email "e2e@example.com"
+  $ git -C source-repo config user.name "e2e"
+  $ GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 git -C source-repo add --all
+  $ GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 git -C source-repo commit --quiet -m old
+  $ sed -i "s|SOURCE_URL|file://$PWD/source-repo|" enozunu.kdl
+  $ enozunu summon
+  assert {
+    exit 0
+  }
+  $ cp enozunu.lock.json lock.before
+  $ sed -i 's/Demo Skill OLD/Demo Skill NEW/' source-repo/skills/demo-skill/SKILL.md
+  $ GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 git -C source-repo commit --quiet -am new
+  $ enozunu summon --frozen
+  assert {
+    exit 0
+    # The frozen run materializes the locked commit and announces no lock
+    # change, because it never writes the file.
+    file <".claude/skills/demo-skill/SKILL.md"> contains "Demo Skill OLD"
+    not {
+      file <".claude/skills/demo-skill/SKILL.md"> contains "Demo Skill NEW"
+    }
+    not {
+      stdout contains "created enozunu.lock.json"
+    }
+    not {
+      stdout contains "updated enozunu.lock.json"
+    }
+  }
+  $ cmp -s enozunu.lock.json lock.before
+  assert {
+    exit 0
+  }
+}
+
+case "a corrupt lock file fails before materializing" {
+  $ GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 git init --quiet --initial-branch main source-repo
+  $ git -C source-repo config user.email "e2e@example.com"
+  $ git -C source-repo config user.name "e2e"
+  $ GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 git -C source-repo add --all
+  $ GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 git -C source-repo commit --quiet -m only
+  $ sed -i "s|SOURCE_URL|file://$PWD/source-repo|" enozunu.kdl
+  write <"enozunu.lock.json"> ```
+    { not json
+    ```
+  $ enozunu summon
+  assert {
+    exit 1
+    stderr contains "lock-parse"
+    not {
+      dir <".claude"> exists
+    }
+    # The corrupt file survives untouched for inspection instead of being
+    # clobbered.
+    file <"enozunu.lock.json"> contains "not json"
+  }
+}
+
+case "an unreachable locked revision suggests summon --update" {
+  $ GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 git init --quiet --initial-branch main source-repo
+  $ git -C source-repo config user.email "e2e@example.com"
+  $ git -C source-repo config user.name "e2e"
+  $ GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 git -C source-repo add --all
+  $ GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 git -C source-repo commit --quiet -m old
+  $ sed -i "s|SOURCE_URL|file://$PWD/source-repo|" enozunu.kdl
+  $ enozunu summon
+  assert {
+    exit 0
+  }
+  # Advance the branch, lock the new tip, then destroy that commit upstream so
+  # the locked revision can no longer be fetched.
+  $ sed -i 's/Demo Skill OLD/Demo Skill NEW/' source-repo/skills/demo-skill/SKILL.md
+  $ GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 git -C source-repo commit --quiet -am vanishing
+  $ enozunu summon --update
+  assert {
+    exit 0
+  }
+  $ GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 git -C source-repo reset --quiet --hard HEAD~1
+  $ GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 git -C source-repo reflog expire --expire=now --all
+  $ GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 git -C source-repo gc --quiet --prune=now
+  $ enozunu summon
+  assert {
+    exit 1
+    stderr contains "git-resolution"
+    stderr contains "enozunu summon --update"
+  }
+}

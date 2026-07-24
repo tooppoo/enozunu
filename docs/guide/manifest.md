@@ -2,8 +2,7 @@
 
 `enozunu.kdl` is the human-authored configuration file for a project.
 
-It declares source definitions under `provider`
-and target materialization choices under `consumer`.
+It declares source definitions under `provider` and target materialization choices under `consumer`.
 
 ## Terminology
 
@@ -152,15 +151,15 @@ url + exactly one of (branch, tag, revision) + path
 Semantics:
 
 - `url` is the Git repository URL.
-- `branch` resolves the current head of the branch on each run.
-- `tag` resolves the commit the tag currently points at, on each run.
-- `revision` pins one exact Git commit.
+- `branch` names a mutable branch ref; the resolved commit is frozen in `enozunu.lock.json`.
+- `tag` names a mutable tag ref; the resolved commit is frozen in `enozunu.lock.json`.
+- `revision` pins one exact Git commit in the manifest itself.
 - `path` is the artifact path inside the resolved Git checkout.
 - `path` must be relative and must not contain empty or `..` segments.
 
 Declaring more than one selector, or none, is rejected. Declaring any `git` field more than once is also rejected: repeated fields are a manifest error, not last-value-wins.
 
-`tag` is a mutable selector, not a pinning one. A Git tag can be moved or deleted on the remote, so Enozunu re-resolves it on every run and offers no more reproducibility than `branch`. Use `revision` for a source that must materialize the same commit every time. The resolved commit is recorded in `.enozunu/provenance.json`, which is where a moved tag becomes visible after the fact.
+`tag` is a mutable selector, not a pinning one. A Git tag can be moved or deleted on the remote, so a tag name alone offers no more reproducibility than `branch`. What keeps a branch or tag source stable is the lock: the first `enozunu summon` records the resolved commit in `enozunu.lock.json`, later runs materialize that recorded commit, and `enozunu summon --update` is the explicit step that follows a moved ref. Use `revision` for a source that must materialize one commit independently of the lock. See [the generated output guide](generated-output.md#the-lock-file) for the lock behavior.
 
 A tag resolves through the fully-qualified `refs/tags/` namespace, so a repository holding both a branch and a tag of one name resolves the tag for a `tag` selector and the branch for a `branch` selector. An annotated tag is peeled to its commit, so a recorded revision is always a commit id and never a tag object id.
 

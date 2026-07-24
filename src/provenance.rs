@@ -1,7 +1,8 @@
 //! Writes the machine-generated provenance record.
 //!
 //! `.enozunu/provenance.json` records what the previous materialization produced.
-//! It is not a lockfile and is not read back as a resolution input in v0.0.x.
+//! It is not a lockfile and is never read back as a resolution input; the resolution input is
+//! `enozunu.lock.json` (see docs/design/adr/20260724T021001Z_lockfile-based-reproducibility.md).
 //! See docs/guide/generated-output.md for the provenance policy.
 
 use std::fs;

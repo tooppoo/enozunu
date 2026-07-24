@@ -6,6 +6,7 @@ use std::process::Command;
 
 use enozunu::diagnostics::DiagnosticCode;
 use enozunu::git::{CommandGitResolver, CommitSha, GitResolutionRequest, GitResolver, GitSelector};
+use enozunu::{LockMode, MaterializeOutcome};
 
 struct TestProject {
     _tmp: tempfile::TempDir,
@@ -141,9 +142,20 @@ enozunu config-version=1 {
 }
 
 fn materialize(project: &TestProject) -> Result<(), Vec<enozunu::diagnostics::Diagnostic>> {
+    materialize_with(project, LockMode::Locked).map(|_| ())
+}
+
+fn materialize_with(
+    project: &TestProject,
+    mode: LockMode,
+) -> Result<MaterializeOutcome, Vec<enozunu::diagnostics::Diagnostic>> {
     let resolver = CommandGitResolver::new(project.root.join(".enozunu/cache"));
-    enozunu::run_materialize(&project.root.join("enozunu.kdl"), &project.root, &resolver)
-        .map(|_| ())
+    enozunu::run_materialize(
+        &project.root.join("enozunu.kdl"),
+        &project.root,
+        &resolver,
+        mode,
+    )
 }
 
 /// Adds a Codex-native TOML agent file to the source repository and commits it.
@@ -329,7 +341,13 @@ enozunu config-version=1 {{
         inner: CommandGitResolver::new(project.root.join(".enozunu/cache")),
         requests: std::cell::RefCell::new(Vec::new()),
     };
-    enozunu::run_materialize(&project.root.join("enozunu.kdl"), &project.root, &resolver).unwrap();
+    enozunu::run_materialize(
+        &project.root.join("enozunu.kdl"),
+        &project.root,
+        &resolver,
+        LockMode::Locked,
+    )
+    .unwrap();
 
     // The same (url, branch) selected by two targets is resolved exactly once.
     assert_eq!(resolver.requests.borrow().len(), 1);
@@ -437,10 +455,11 @@ fn rematerialize_replaces_instead_of_merging() {
     assert!(helper.is_file());
 
     // Remove the supporting file from the source; regeneration must remove it from the target too.
+    // The default mode would materialize the locked pre-removal commit, so the run opts into update.
     fs::remove_file(project.source_repo.join("skills/demo-skill/helper.txt")).unwrap();
     commit_all(&project.source_repo, "remove helper");
 
-    materialize(&project).unwrap();
+    materialize_with(&project, LockMode::Update).unwrap();
 
     assert!(!helper.exists());
     assert!(
@@ -931,25 +950,6 @@ enozunu config-version=1 {{
 }
 
 #[test]
-fn follows_branch_updates_across_runs() {
-    let project = setup();
-    write_manifest(&project);
-    materialize(&project).unwrap();
-
-    fs::write(
-        project.source_repo.join("agents/demo-agent.md"),
-        "# demo agent v2\n",
-    )
-    .unwrap();
-    commit_all(&project.source_repo, "update agent");
-
-    materialize(&project).unwrap();
-
-    let agent = fs::read_to_string(project.root.join(".claude/agents/demo-agent.md")).unwrap();
-    assert_eq!(agent, "# demo agent v2\n");
-}
-
-#[test]
 fn materializes_a_git_source_pinned_to_an_exact_revision() {
     let project = setup();
     let pinned = rev_parse(&project.source_repo, "main");
@@ -1204,32 +1204,6 @@ enozunu config-version=1 {{
 }
 
 #[test]
-fn follows_tag_moves_across_runs() {
-    let project = setup();
-    write_tag_manifest(&project, "v1.0.0");
-    git(&project.source_repo, &["tag", "v1.0.0"]);
-    materialize(&project).unwrap();
-    assert_eq!(
-        fs::read_to_string(project.root.join(".claude/agents/demo-agent.md")).unwrap(),
-        "# demo agent\n"
-    );
-
-    // A tag is a mutable ref: Enozunu re-resolves it each run rather than caching the first commit it saw.
-    fs::write(
-        project.source_repo.join("agents/demo-agent.md"),
-        "# demo agent v2\n",
-    )
-    .unwrap();
-    commit_all(&project.source_repo, "advance past the original tag");
-    git(&project.source_repo, &["tag", "--force", "v1.0.0"]);
-
-    materialize(&project).unwrap();
-
-    let agent = fs::read_to_string(project.root.join(".claude/agents/demo-agent.md")).unwrap();
-    assert_eq!(agent, "# demo agent v2\n");
-}
-
-#[test]
 fn rejects_an_unknown_tag_with_git_resolution_diagnostic() {
     let project = setup();
     write_tag_manifest(&project, "v9.9.9");
@@ -1329,7 +1303,13 @@ enozunu config-version=1 {{
         inner: CommandGitResolver::new(project.root.join(".enozunu/cache")),
         requests: std::cell::RefCell::new(Vec::new()),
     };
-    enozunu::run_materialize(&project.root.join("enozunu.kdl"), &project.root, &resolver).unwrap();
+    enozunu::run_materialize(
+        &project.root.join("enozunu.kdl"),
+        &project.root,
+        &resolver,
+        LockMode::Locked,
+    )
+    .unwrap();
 
     assert_eq!(resolver.requests.borrow().len(), 1);
     assert_eq!(
@@ -1491,5 +1471,54 @@ fn resolver_export_drops_stale_files_from_a_previous_resolution() {
             .content_root
             .join("skills/demo-skill/SKILL.md")
             .is_file()
+    );
+}
+
+// Lockfile tests. Lock behavior that is observable through the CLI — file contents, output
+// lines, exit codes, diagnostics — lives in e2e/summon_lockfile.repor; only behavior that needs a
+// recording resolver stays here.
+
+#[test]
+fn a_locked_branch_resolves_through_the_revision_selector() {
+    // A resolver that records every request, so the second run is proven to ask for the locked
+    // revision instead of the branch.
+    struct CountingResolver {
+        inner: CommandGitResolver,
+        requests: std::cell::RefCell<Vec<GitResolutionRequest>>,
+    }
+    impl GitResolver for CountingResolver {
+        fn resolve(
+            &self,
+            request: &GitResolutionRequest,
+        ) -> Result<enozunu::git::ResolvedSource, enozunu::git::GitError> {
+            self.requests.borrow_mut().push(request.clone());
+            self.inner.resolve(request)
+        }
+    }
+
+    let project = setup();
+    let locked = rev_parse(&project.source_repo, "main");
+    write_manifest(&project);
+    let resolver = CountingResolver {
+        inner: CommandGitResolver::new(project.root.join(".enozunu/cache")),
+        requests: std::cell::RefCell::new(Vec::new()),
+    };
+
+    for _ in 0..2 {
+        enozunu::run_materialize(
+            &project.root.join("enozunu.kdl"),
+            &project.root,
+            &resolver,
+            LockMode::Locked,
+        )
+        .unwrap();
+    }
+
+    let requests = resolver.requests.borrow();
+    assert_eq!(requests.len(), 2);
+    assert_eq!(requests[0].selector, GitSelector::Branch("main".to_owned()));
+    assert_eq!(
+        requests[1].selector,
+        GitSelector::Revision(CommitSha::parse(&locked).unwrap())
     );
 }

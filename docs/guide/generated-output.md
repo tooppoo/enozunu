@@ -2,7 +2,7 @@
 
 Enozunu-managed target AI-native directories are generated output. For which target AIs are supported and exactly where each artifact is written, see [the supported targets page](support.md).
 
-This guide is operational: what to commit, what regeneration does to your files, and how to inspect what was materialized. For why generated output is not treated as source of truth, see [the philosophy](../design/philosophy.md#generated-output-is-not-a-collaboration-surface). For the scope and policy behind it, see [the v0.0.x goal](../design/v0.0.x-goal.md).
+This guide is operational: what to commit, what regeneration does to your files, and how to inspect what was materialized. For why generated output is not treated as source of truth, see [the philosophy](../design/philosophy.md#generated-output-is-not-a-collaboration-surface). For the scope and policy behind it, see [the v0.0.x goal](../design/v0.0.x-goal.md) and [the v0.1.x goal](../design/v0.1.x-goal.md).
 
 ## Git Management
 
@@ -10,8 +10,11 @@ Recommended Git-managed files:
 
 ```text
 enozunu.kdl
+enozunu.lock.json
 .enozunu/provenance.json
 ```
+
+Committing `enozunu.lock.json` is what delivers the reproducibility guarantee: another machine materializes the same commits only if it sees the same lock.
 
 Recommended Git-ignored files:
 
@@ -64,6 +67,35 @@ If an edit should be durable, use one of these approaches:
 1. change the provider-side source that Enozunu materializes
 2. stop treating the target directory as generated output, and Git-manage it as ordinary project configuration
 
+## The Lock File
+
+`enozunu.lock.json` records the resolved commit for every mutable Git selector — `branch` and `tag` — and is the resolution input for later runs:
+
+```json
+{
+  "version": 1,
+  "entries": [
+    {
+      "url": "https://github.com/example/repo",
+      "selector": { "type": "branch", "value": "main" },
+      "resolved_revision": "468aac8caed5f0c3b859b8286968e2c78e2b8760"
+    }
+  ]
+}
+```
+
+Revision-pinned Git sources, Gist sources, and local sources have no lock entries: the manifest already pins the first two exactly, and a local source has no revision to freeze.
+
+`enozunu summon` is lock-first by default:
+
+- A source with a lock entry materializes the recorded commit, even if the branch or tag has moved upstream.
+- A source without a lock entry resolves fresh and is added to the lock.
+- A source removed from the manifest is pruned from the lock on the next run.
+
+`enozunu summon --update` re-resolves every mutable selector and rewrites the lock; this is how a locked ref moves. `enozunu summon --frozen` resolves strictly from the lock, never writes it, and fails with `lock-out-of-date` when the lock is missing or lacks an entry for a mutable source; use it in CI. The lock file is rewritten only when its content changes, and the CLI prints a `created` or `updated` line only for a real file change.
+
+A lock guarantees that the same commit is requested, not that the remote still serves it: a commit removed upstream fails resolution with a hint to run `enozunu summon --update`. The design is recorded in [the lockfile ADR](../design/adr/20260724T021001Z_lockfile-based-reproducibility.md).
+
 ## Inspecting Provenance
 
 `.enozunu/provenance.json` records the previous materialization result.
@@ -107,6 +139,6 @@ A Skill Gist materializes the root of the pinned revision, so its `source` objec
 
 A Gist source is recorded as `type: "gist"`, never as `type: "git"`, even though Git transport materializes it. The recorded `revision` equals the pinned Gist revision.
 
-`provenance.json` is not a lockfile. It is not used as a resolution input in v0.0.x. Because the record is inspection-only output rather than a read-back contract, its shape may change within v0.0.x without a version bump; the rationale is recorded in [the Git exact revision selector ADR](../design/adr/20260712T155345Z_git-exact-revision-selector.md#compatibility).
+`provenance.json` is not a lockfile, and it is never used as a resolution input. The resolution input is `enozunu.lock.json`; provenance stays the write-only record of what the last run materialized. Because the record is inspection-only output rather than a read-back contract, its shape may change without a version bump; the rationale is recorded in [the Git exact revision selector ADR](../design/adr/20260712T155345Z_git-exact-revision-selector.md#compatibility).
 
-Because branch and tag selectors are mutable, materializing the same manifest at different times may produce different results for branch-selected and tag-selected sources. A tag is mutable because Git lets a remote move or delete it, not because Enozunu re-interprets it. Revision-selected Git sources and pinned Gist sources materialize the same commit on every run. The provenance record exists to make the previous result inspectable.
+Branch and tag selectors are mutable refs, but a locked source materializes its recorded commit until `summon --update`; a moved ref becomes visible as a lock diff rather than a silent output change. Revision-selected Git sources and pinned Gist sources materialize the same commit on every run without a lock entry. The provenance record exists to make the previous result inspectable.

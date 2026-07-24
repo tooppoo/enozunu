@@ -25,7 +25,7 @@ Enozunu manages where AI-agent configuration comes from and where it is material
 
 The supported target AIs are Claude and Codex. Both select from the same source pool, and each selection is materialized into that target's native path. For the exact placement of each artifact, see [the supported targets guide](docs/guide/support.md).
 
-Enozunu is in early design. The current v0.0.x goal is intentionally narrow and does not guarantee exact reproducibility. For the scope and non-goals of this phase, see [the v0.0.x goal](docs/design/v0.0.x-goal.md).
+Enozunu is in early design and its goal is intentionally narrow. Mutable Git selections are kept reproducible through `enozunu.lock.json`; for the current scope and non-goals, see [the v0.1.x goal](docs/design/v0.1.x-goal.md), and for the initial phase, [the v0.0.x goal](docs/design/v0.0.x-goal.md).
 
 ## Usage
 
@@ -48,6 +48,8 @@ Resolve declared sources and materialize them into target AI project paths:
 ```sh
 enozunu summon
 ```
+
+The first run records the resolved commit of every `branch` and `tag` selection in `enozunu.lock.json`; later runs materialize those recorded commits. Commit the lock file to make runs reproducible across machines. Use `enozunu summon --update` to follow moved refs and refresh the lock, and `enozunu summon --frozen` in CI to fail instead of resolving anything the lock does not cover. See [the generated output guide](docs/guide/generated-output.md#the-lock-file) for details.
 
 All commands operate on `enozunu.kdl` in the project root by default. Use `--manifest` and `--project-root` to override the defaults.
 
@@ -92,4 +94,5 @@ To understand how Enozunu works, read [the design docs](docs/design/README.md):
 
 - [Philosophy](docs/design/philosophy.md)
 - [v0.0.x goal](docs/design/v0.0.x-goal.md)
+- [v0.1.x goal](docs/design/v0.1.x-goal.md)
 - [Architecture Decision Records](docs/design/adr/README.md)

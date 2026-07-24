@@ -28,9 +28,10 @@ This provides:
 - one source that can be reused by multiple projects or supported target AIs
 - regeneration of target-native configuration from the manifest
 - provenance showing what source was materialized
+- a lock file that keeps `branch` and `tag` selections on the same commit across runs and machines
 
-A `branch` or `tag` selector can resolve differently over time.
-Use an exact `revision` when a Git source must stay pinned to one commit.
+A `branch` or `tag` selector stays on its locked commit until an explicit `enozunu summon --update`.
+Use an exact `revision` when a Git source must stay pinned to one commit independently of the lock.
 
 ### Distribute Tool-Specific Skills and Agents Without a Custom Installer
 
@@ -47,8 +48,7 @@ For the declaration syntax, see [the manifest format guide](manifest.md).
 
 ## Use Enozunu When
 
-Use Enozunu when you want to keep target AI-native directories out of the main
-source of truth.
+Use Enozunu when you want to keep target AI-native directories out of the main source of truth.
 
 Examples:
 
@@ -59,7 +59,7 @@ Examples:
 - you want to inspect what source revision was materialized
 - you maintain a tool and want to distribute tool-specific Skills or agents without implementing a custom setup mechanism
 
-For v0.0.x, this means declaring sources in `enozunu.kdl` and materializing them into supported Claude or Codex project paths.
+Concretely, this means declaring sources in `enozunu.kdl` and materializing them into supported Claude or Codex project paths.
 
 ## Do Not Use Enozunu When
 
@@ -79,11 +79,10 @@ Do not use Enozunu when you want manual edits inside generated output to be pres
 Generated output is regenerated from declarations.
 If a target AI-native directory needs to be hand-maintained, make it explicit Git-managed project configuration instead of treating it as Enozunu output.
 
-## Not a Good Fit for v0.0.x
+## Not a Good Fit
 
-v0.0.x is not a good fit if you need:
+Enozunu is not a good fit if you need:
 
-- lockfile-based reproducibility
 - version ranges
 - dependency solving
 - registry or marketplace discovery
@@ -92,11 +91,11 @@ v0.0.x is not a good fit if you need:
 - automatic hook or MCP configuration
 - generated-output hand-edit reconciliation
 
-Those may be future issues, but they are not part of the v0.0.x goal.
+Those may be future issues, but they are not part of the current goal.
 
-## Good Fit for v0.0.x
+## Good Fit
 
-v0.0.x is a good fit if you accept these constraints:
+Enozunu is a good fit if you accept these constraints:
 
 - Claude and Codex are the supported target AIs
 - a `git` source selects its commit with exactly one selector: a mutable branch, a mutable tag, or an exact revision
@@ -104,5 +103,6 @@ v0.0.x is a good fit if you accept these constraints:
 - Skill sources are directories containing `SKILL.md`
 - agent sources are target-native files: Markdown for Claude and TOML for Codex
 - `.claude/`, `.agents/`, and `.codex/` are generated output for the selected targets
+- `enozunu.lock.json` is a machine-generated resolution record and must be committed for reproducibility
 - `.enozunu/provenance.json` is a machine-generated derived record
-- exact reproducibility is not guaranteed
+- a lock guarantees the same commit is requested, not that the remote still serves it

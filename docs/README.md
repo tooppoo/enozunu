@@ -16,5 +16,6 @@ Read [the guide](guide/README.md). It covers deciding whether Enozunu fits, writ
 Read [the design docs](design/README.md). They explain the reasoning and boundaries behind the tool rather than how to operate it.
 
 - [Philosophy](design/philosophy.md) — what Enozunu is and is not
-- [v0.0.x goal](design/v0.0.x-goal.md) — the current scope and non-goals
+- [v0.0.x goal](design/v0.0.x-goal.md) — the initial scope and non-goals
+- [v0.1.x goal](design/v0.1.x-goal.md) — whole-run reproducibility through the lock file
 - [Architecture Decision Records](design/adr/README.md) — recorded design decisions and their trade-offs

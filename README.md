@@ -1,5 +1,7 @@
 # enozunu
 
+<img src="./docs/assets/enozunu-icon.png" height="200" width="auto">
+
 Enozunu(`役小角`) is a cross-provider configuration materializer for AI agent tooling.
 
 It centralizes human-authored definitions of AI-agent configuration sources and materializes them into target AI-native configuration paths.

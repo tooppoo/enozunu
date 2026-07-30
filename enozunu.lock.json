@@ -8,6 +8,14 @@
         "value": "main"
       },
       "resolved_revision": "a23446fe66747d5f79194dcb566a9a8c69380507"
+    },
+    {
+      "url": "https://github.com/tooppoo/reportage",
+      "selector": {
+        "type": "tag",
+        "value": "0.0.7"
+      },
+      "resolved_revision": "cac6b603d75e6aaaab6d04992643b0e7818f8d78"
     }
   ]
 }

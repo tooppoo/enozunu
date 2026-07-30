@@ -36,9 +36,9 @@ enozunu config-version=1 {
 
       skill "reportage" {
         git {
-          url "https://github.com/tooppoo/catalog-agent-tools"
-          branch "main"
-          path "common/skills/reportage"
+          url "https://github.com/tooppoo/reportage"
+          tag "0.0.7"
+          path "ai/skills/reportage"
         }
       }
 

@@ -70,13 +70,13 @@
       "kind": "skill",
       "source": {
         "type": "git",
-        "url": "https://github.com/tooppoo/catalog-agent-tools",
+        "url": "https://github.com/tooppoo/reportage",
         "selector": {
-          "type": "branch",
-          "value": "main"
+          "type": "tag",
+          "value": "0.0.7"
         },
-        "path": "common/skills/reportage",
-        "resolved_revision": "a23446fe66747d5f79194dcb566a9a8c69380507"
+        "path": "ai/skills/reportage",
+        "resolved_revision": "cac6b603d75e6aaaab6d04992643b0e7818f8d78"
       },
       "target_ai": "claude",
       "target_path": ".claude/skills/reportage"
@@ -150,13 +150,13 @@
       "kind": "skill",
       "source": {
         "type": "git",
-        "url": "https://github.com/tooppoo/catalog-agent-tools",
+        "url": "https://github.com/tooppoo/reportage",
         "selector": {
-          "type": "branch",
-          "value": "main"
+          "type": "tag",
+          "value": "0.0.7"
         },
-        "path": "common/skills/reportage",
-        "resolved_revision": "a23446fe66747d5f79194dcb566a9a8c69380507"
+        "path": "ai/skills/reportage",
+        "resolved_revision": "cac6b603d75e6aaaab6d04992643b0e7818f8d78"
       },
       "target_ai": "codex",
       "target_path": ".agents/skills/reportage"

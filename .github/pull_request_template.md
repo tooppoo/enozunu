@@ -1,11 +1,30 @@
 
 resolve #<issue-number>
 
+<!-- PRの内容を説明するために必要なら、HTMLを使って記述しても良い -->
+
+## この PR で判断してほしいこと
+
+<!--
+レビュアーが判断すべき主要な問いを、1文で1つだけ記載する。
+Issue 全体の完了より、独立してレビュー可能な最小の変更単位を優先する。
+複数の独立した判断を含む場合は、PR を分割する。
+-->
+
+## リスクとレビュー重点
+
+<!--
+レビュアーに特に見てほしい点。
+仕様判断、scope 境界、エラー処理、テスト不足、破壊的変更の可能性など。
+-->
+
 ## 変更の概要
 
-## Issue の目的にとって特に重要な変更
-
-## Issue / 既存ドキュメントから直接導ける変更
+<!--
+- 変更前後でどのようにアーキテクチャが変化したのかを記述する
+- アーキテクチャをテキストだけでなく図でも説明する
+  - 図の記述にはmermaidを用いること
+-->
 
 ## Issue / 既存ドキュメントから直接導けない変更
 
@@ -25,8 +44,6 @@ Issue 本文・Issue コメント・既存 docs/ADR から直接は導けない�
 - [ ] ADR が必要な設計判断はない
 - [ ] ADR が必要な設計判断があり、作成・更新した
 - [ ] ADR が必要そうな判断はあるが、この PR では作成していない
-
-### 作成・更新した ADR
 
 ### ADR 不要 / 未作成と判断した理由
 
@@ -64,28 +81,40 @@ CLI, config, state file, schema, logs, worktree/branch, GitHub Issue/PR 操作�
 - 既存 run / 既存データへの影響:
 - 運用上の注意:
 
-## リスクとレビュー重点
+## 作成・更新したテスト
 
 <!--
-レビュアーに特に見てほしい点。
-仕様判断、scope 境界、エラー処理、テスト不足、破壊的変更の可能性など。
--->
+テストを追加・変更・削除・移動・縮小した場合は、テスト名またはテスト群ごとに分類と理由を記載する。
+特に Rust integration test と .repor self-test / Rust unit test の間で責務を移す場合は、
+どの層に置くべき検証なのかを明示する。
 
-## 作成・更新したテスト
+Rust integration test の責務を変更する場合の分類例:
+- keep-integration: Rust integration test に残す
+- shrink-integration: Rust integration test として残すが検証観点を縮小する
+- remove-covered-by-self-test: .repor self-test に移行済みのため削除する
+- move-to-unit-focused-test: 内部モデル検証として Rust unit / focused test に移す
+- add-self-test: 利用者可視 CLI behavior として .repor self-test を追加する
+-->
 
 ### <観点 1>
 
-- `<TestName>`
+- `<TestName or test group>`
+  - 分類:
   - 何を検証するか:
   - 対応する Issue 要件 / 既存仕様:
   - 失敗すると検出できる問題:
+  - この層で検証する理由:
+  - 対応する self-test / unit test / docs:
 
 ### <観点 2>
 
-- `<TestName>`
+- `<TestName or test group>`
+  - 分類:
   - 何を検証するか:
   - 対応する Issue 要件 / 既存仕様:
   - 失敗すると検出できる問題:
+  - この層で検証する理由:
+  - 対応する self-test / unit test / docs:
 
 ## 手動確認
 
@@ -96,8 +125,7 @@ CLI, config, state file, schema, logs, worktree/branch, GitHub Issue/PR 操作�
 
 ## 確認したこと
 
-- [ ] `go test ./...`
-- [ ] `make fmt-check`
+- [ ] `just check`
 - [ ] その他:
   - [ ] `...`
   - [ ] `...`

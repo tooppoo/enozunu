@@ -311,6 +311,22 @@ The same Skill source can be selected from both targets. Enozunu resolves it onc
 
 Agent sources are target-native. A Claude agent is a Markdown file and a Codex custom agent is a TOML file, so the provider declares a separate source for each and each target selects the one written for it. Enozunu materializes the file verbatim; it does not convert a Claude agent into a Codex agent or the reverse.
 
+### Selection Node Aggregation
+
+A target block may declare `use-skills` and `use-agents` nodes more than once.
+Repeated nodes of the same kind concatenate in declaration order, so the grouped form and the split form select the same sources in the same order:
+
+```kdl
+use-skills "git-kura" "semantic-line-breaks"
+```
+
+```kdl
+use-skills "git-kura"
+use-skills "semantic-line-breaks"
+```
+
+Selecting the same name twice within one target is rejected, whether the repetition appears inside one node or across nodes, because both selections materialize to the same target path.
+
 ### Skills
 
 `use-skills` selects Skill sources by name. Each referenced name must exist under `provider.skills`.
@@ -390,6 +406,7 @@ git { url + exactly one of (branch, tag, revision) + path }
 v0.0.x should reject:
 
 - duplicate source names within the same kind
+- multiple selections resolving to the same target path, including the same name selected twice within one target
 - `use-skills` references that do not exist under `provider.skills`
 - `use-agents` references that do not exist under `provider.agents`
 - source declarations without exactly one source reference block

@@ -179,16 +179,19 @@ enozunu config-version=1 {
         );
     }
 
-    #[test]
-    fn plans_split_use_skills_nodes_identically_to_the_grouped_form() {
-        let manifest_with = |selection: &str| {
-            format!(
-                r#"
+    /// Wraps consumer selection nodes in a manifest declaring skills `a` / `b` and agents `x` / `y`, so tests compare grouped and split selection forms against one provider pool.
+    fn claude_selecting(selection: &str) -> String {
+        format!(
+            r#"
 enozunu config-version=1 {{
   provider {{
     skills {{
       skill "a" {{ git {{ url "https://example.com/r"; branch "main"; path "s/a" }} }}
       skill "b" {{ git {{ url "https://example.com/r"; branch "main"; path "s/b" }} }}
+    }}
+    agents {{
+      agent "x" {{ git {{ url "https://example.com/r"; branch "main"; path "a/x.md" }} }}
+      agent "y" {{ git {{ url "https://example.com/r"; branch "main"; path "a/y.md" }} }}
     }}
   }}
   consumer {{
@@ -198,12 +201,16 @@ enozunu config-version=1 {{
   }}
 }}
 "#
-            )
-        };
+        )
+    }
+
+    #[test]
+    fn plans_split_use_skills_nodes_identically_to_the_grouped_form() {
         let grouped =
-            plan(&manifest::parse(&manifest_with(r#"      use-skills "a" "b""#)).unwrap()).unwrap();
+            plan(&manifest::parse(&claude_selecting(r#"      use-skills "a" "b""#)).unwrap())
+                .unwrap();
         let split = plan(
-            &manifest::parse(&manifest_with(
+            &manifest::parse(&claude_selecting(
                 r#"      use-skills "a"
       use-skills "b""#,
             ))
@@ -217,6 +224,29 @@ enozunu config-version=1 {{
                 .map(|e| e.target_rel_path.as_str())
                 .collect::<Vec<_>>(),
             [".claude/skills/a", ".claude/skills/b"]
+        );
+    }
+
+    #[test]
+    fn plans_split_use_agents_nodes_identically_to_the_grouped_form() {
+        let grouped =
+            plan(&manifest::parse(&claude_selecting(r#"      use-agents "x" "y""#)).unwrap())
+                .unwrap();
+        let split = plan(
+            &manifest::parse(&claude_selecting(
+                r#"      use-agents "x"
+      use-agents "y""#,
+            ))
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(grouped, split);
+        assert_eq!(
+            grouped
+                .iter()
+                .map(|e| e.target_rel_path.as_str())
+                .collect::<Vec<_>>(),
+            [".claude/agents/x.md", ".claude/agents/y.md"]
         );
     }
 

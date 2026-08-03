@@ -179,6 +179,103 @@ enozunu config-version=1 {
         );
     }
 
+    /// Wraps consumer selection nodes in a manifest declaring skills `a` / `b` and agents `x` / `y`, so tests compare grouped and split selection forms against one provider pool.
+    fn claude_selecting(selection: &str) -> String {
+        format!(
+            r#"
+enozunu config-version=1 {{
+  provider {{
+    skills {{
+      skill "a" {{ git {{ url "https://example.com/r"; branch "main"; path "s/a" }} }}
+      skill "b" {{ git {{ url "https://example.com/r"; branch "main"; path "s/b" }} }}
+    }}
+    agents {{
+      agent "x" {{ git {{ url "https://example.com/r"; branch "main"; path "a/x.md" }} }}
+      agent "y" {{ git {{ url "https://example.com/r"; branch "main"; path "a/y.md" }} }}
+    }}
+  }}
+  consumer {{
+    claude {{
+{selection}
+    }}
+  }}
+}}
+"#
+        )
+    }
+
+    #[test]
+    fn plans_split_use_skills_nodes_identically_to_the_grouped_form() {
+        let grouped =
+            plan(&manifest::parse(&claude_selecting(r#"      use-skills "a" "b""#)).unwrap())
+                .unwrap();
+        let split = plan(
+            &manifest::parse(&claude_selecting(
+                r#"      use-skills "a"
+      use-skills "b""#,
+            ))
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(grouped, split);
+        assert_eq!(
+            grouped
+                .iter()
+                .map(|e| e.target_rel_path.as_str())
+                .collect::<Vec<_>>(),
+            [".claude/skills/a", ".claude/skills/b"]
+        );
+    }
+
+    #[test]
+    fn plans_split_use_agents_nodes_identically_to_the_grouped_form() {
+        let grouped =
+            plan(&manifest::parse(&claude_selecting(r#"      use-agents "x" "y""#)).unwrap())
+                .unwrap();
+        let split = plan(
+            &manifest::parse(&claude_selecting(
+                r#"      use-agents "x"
+      use-agents "y""#,
+            ))
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(grouped, split);
+        assert_eq!(
+            grouped
+                .iter()
+                .map(|e| e.target_rel_path.as_str())
+                .collect::<Vec<_>>(),
+            [".claude/agents/x.md", ".claude/agents/y.md"]
+        );
+    }
+
+    #[test]
+    fn rejects_duplicate_target_paths_across_split_nodes() {
+        // The same name repeated across split nodes collides exactly like `use-skills "a" "a"` inside one node.
+        let text = r#"
+enozunu config-version=1 {
+  provider {
+    skills {
+      skill "a" { git { url "https://example.com/r"; branch "main"; path "s/a" } }
+    }
+  }
+  consumer {
+    claude {
+      use-skills "a"
+      use-skills "a"
+    }
+  }
+}
+"#;
+        let diags = plan(&manifest::parse(text).unwrap()).unwrap_err();
+        assert!(
+            diags
+                .iter()
+                .any(|d| d.code == DiagnosticCode::DuplicateTargetPath)
+        );
+    }
+
     #[test]
     fn plans_codex_skill_and_agent_into_codex_native_paths() {
         let text = r#"

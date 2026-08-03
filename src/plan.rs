@@ -180,6 +180,73 @@ enozunu config-version=1 {
     }
 
     #[test]
+    fn plans_split_use_skills_nodes_identically_to_the_grouped_form() {
+        let manifest_with = |selection: &str| {
+            format!(
+                r#"
+enozunu config-version=1 {{
+  provider {{
+    skills {{
+      skill "a" {{ git {{ url "https://example.com/r"; branch "main"; path "s/a" }} }}
+      skill "b" {{ git {{ url "https://example.com/r"; branch "main"; path "s/b" }} }}
+    }}
+  }}
+  consumer {{
+    claude {{
+{selection}
+    }}
+  }}
+}}
+"#
+            )
+        };
+        let grouped =
+            plan(&manifest::parse(&manifest_with(r#"      use-skills "a" "b""#)).unwrap()).unwrap();
+        let split = plan(
+            &manifest::parse(&manifest_with(
+                r#"      use-skills "a"
+      use-skills "b""#,
+            ))
+            .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(grouped, split);
+        assert_eq!(
+            grouped
+                .iter()
+                .map(|e| e.target_rel_path.as_str())
+                .collect::<Vec<_>>(),
+            [".claude/skills/a", ".claude/skills/b"]
+        );
+    }
+
+    #[test]
+    fn rejects_duplicate_target_paths_across_split_nodes() {
+        // The same name repeated across split nodes collides exactly like `use-skills "a" "a"` inside one node.
+        let text = r#"
+enozunu config-version=1 {
+  provider {
+    skills {
+      skill "a" { git { url "https://example.com/r"; branch "main"; path "s/a" } }
+    }
+  }
+  consumer {
+    claude {
+      use-skills "a"
+      use-skills "a"
+    }
+  }
+}
+"#;
+        let diags = plan(&manifest::parse(text).unwrap()).unwrap_err();
+        assert!(
+            diags
+                .iter()
+                .any(|d| d.code == DiagnosticCode::DuplicateTargetPath)
+        );
+    }
+
+    #[test]
     fn plans_codex_skill_and_agent_into_codex_native_paths() {
         let text = r#"
 enozunu config-version=1 {

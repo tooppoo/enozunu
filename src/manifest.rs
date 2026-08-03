@@ -817,8 +817,11 @@ fn parse_target_consumer(
     if let Some(children) = node.children() {
         for child in children.nodes() {
             match child.name().value() {
-                "use-skills" => use_skills = string_args(child, "use-skills", diags),
-                "use-agents" => use_agents = string_args(child, "use-agents", diags),
+                // A `use-skills` / `use-agents` node declares selections; it is not a value later nodes override.
+                // Nodes concatenate in declaration order, so the grouped form (`use-skills "a" "b"`) and the split form (`use-skills "a"` + `use-skills "b"`) parse identically and node boundaries carry no meaning after parse.
+                // A name repeated across nodes therefore collides on its target path at plan time, the same as repeating it inside one node.
+                "use-skills" => use_skills.extend(string_args(child, "use-skills", diags)),
+                "use-agents" => use_agents.extend(string_args(child, "use-agents", diags)),
                 other => diags.push(Diagnostic::new(
                     DiagnosticCode::ManifestShape,
                     format!("unknown node `{other}` under `consumer.{target}`"),
@@ -1112,6 +1115,75 @@ enozunu config-version=1 {
             manifest.consumer.codex.as_ref().unwrap().use_skills,
             ["git-kura"]
         );
+    }
+
+    /// Wraps consumer node bodies in a manifest declaring skills `a` / `b` and agents `x` / `y`, so tests compare grouped and split selection forms against one provider pool.
+    fn consumer_claude(body: &str) -> String {
+        format!(
+            r#"
+enozunu config-version=1 {{
+  provider {{
+    skills {{
+      skill "a" {{ git {{ url "https://example.com/r"; branch "main"; path "s/a" }} }}
+      skill "b" {{ git {{ url "https://example.com/r"; branch "main"; path "s/b" }} }}
+    }}
+    agents {{
+      agent "x" {{ git {{ url "https://example.com/r"; branch "main"; path "a/x.md" }} }}
+      agent "y" {{ git {{ url "https://example.com/r"; branch "main"; path "a/y.md" }} }}
+    }}
+  }}
+  consumer {{
+    claude {{
+{body}
+    }}
+  }}
+}}
+"#
+        )
+    }
+
+    #[test]
+    fn parses_split_use_skills_nodes_identically_to_the_grouped_form() {
+        let grouped = parse(&consumer_claude(r#"      use-skills "a" "b""#)).unwrap();
+        let split = parse(&consumer_claude(
+            r#"      use-skills "a"
+      use-skills "b""#,
+        ))
+        .unwrap();
+        assert_eq!(
+            grouped.consumer.claude.as_ref().unwrap().use_skills,
+            ["a", "b"]
+        );
+        assert_eq!(grouped, split);
+    }
+
+    #[test]
+    fn parses_split_use_agents_nodes_identically_to_the_grouped_form() {
+        let grouped = parse(&consumer_claude(r#"      use-agents "x" "y""#)).unwrap();
+        let split = parse(&consumer_claude(
+            r#"      use-agents "x"
+      use-agents "y""#,
+        ))
+        .unwrap();
+        assert_eq!(
+            grouped.consumer.claude.as_ref().unwrap().use_agents,
+            ["x", "y"]
+        );
+        assert_eq!(grouped, split);
+    }
+
+    #[test]
+    fn keeps_declaration_order_across_mixed_grouped_and_split_nodes() {
+        let manifest = parse(&consumer_claude(
+            r#"      use-skills "b"
+      use-agents "y"
+      use-skills "a"
+      use-agents "x""#,
+        ))
+        .unwrap();
+        let claude = manifest.consumer.claude.as_ref().unwrap();
+        assert_eq!(claude.use_skills, ["b", "a"]);
+        assert_eq!(claude.use_agents, ["y", "x"]);
     }
 
     #[test]

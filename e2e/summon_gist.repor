@@ -103,6 +103,11 @@ case "summon reports a gist revision that does not exist" {
 # message prefix naming the artifact kind: the file-shaped checks are shared
 # across kinds (issue #38), so a failure must be reported as the entry's actual
 # kind rather than a hard-coded `agent`.
+#
+# The workspace path and the pinned revision are captured as case-local
+# bindings and substituted into interpolated `write` literals, so the
+# gitconfig and the manifest are written declaratively rather than assembled
+# with shell redirection and sed.
 
 case "summon reports a gist file missing from the pinned revision" {
   $ git init --quiet --initial-branch main gist-repo
@@ -111,15 +116,22 @@ case "summon reports a gist file missing from the pinned revision" {
   $ printf '# shell reviewer\n' > gist-repo/agent.md
   $ git -C gist-repo add agent.md
   $ git -C gist-repo commit --quiet -m only
-  $ printf '[url "file://%s/gist-repo"]\n\tinsteadOf = https://gist.github.com/2decf6c462d9b4418f2.git\n' "$PWD" > fake-gitconfig
-  write <"enozunu.kdl"> ```
+  $ pwd
+  let workspace <- stdout_line
+  $ git -C gist-repo rev-parse HEAD
+  let rev <- stdout_line
+  write <"fake-gitconfig"> &```
+    [url "file://&{workspace}/gist-repo"]
+      insteadOf = https://gist.github.com/2decf6c462d9b4418f2.git
+    ```
+  write <"enozunu.kdl"> &```
     enozunu config-version=1 {
       provider {
         agents {
           agent "gist-reviewer" {
             gist {
               id "2decf6c462d9b4418f2"
-              revision "PINNED_REVISION"
+              revision "&{rev}"
               file "missing.md"
             }
           }
@@ -132,7 +144,6 @@ case "summon reports a gist file missing from the pinned revision" {
       }
     }
     ```
-  $ rev=$(git -C gist-repo rev-parse HEAD) && sed -i "s/PINNED_REVISION/$rev/" enozunu.kdl
   $ GIT_CONFIG_GLOBAL="$PWD/fake-gitconfig" GIT_CONFIG_NOSYSTEM=1 enozunu summon
   assert {
     exit 1
@@ -153,15 +164,22 @@ case "summon reports a gist file that is a directory" {
   $ printf 'inner\n' > gist-repo/dir.md/inner.txt
   $ git -C gist-repo add dir.md
   $ git -C gist-repo commit --quiet -m dir
-  $ printf '[url "file://%s/gist-repo"]\n\tinsteadOf = https://gist.github.com/2decf6c462d9b4418f2.git\n' "$PWD" > fake-gitconfig
-  write <"enozunu.kdl"> ```
+  $ pwd
+  let workspace <- stdout_line
+  $ git -C gist-repo rev-parse HEAD
+  let rev <- stdout_line
+  write <"fake-gitconfig"> &```
+    [url "file://&{workspace}/gist-repo"]
+      insteadOf = https://gist.github.com/2decf6c462d9b4418f2.git
+    ```
+  write <"enozunu.kdl"> &```
     enozunu config-version=1 {
       provider {
         agents {
           agent "gist-reviewer" {
             gist {
               id "2decf6c462d9b4418f2"
-              revision "PINNED_REVISION"
+              revision "&{rev}"
               file "dir.md"
             }
           }
@@ -174,7 +192,6 @@ case "summon reports a gist file that is a directory" {
       }
     }
     ```
-  $ rev=$(git -C gist-repo rev-parse HEAD) && sed -i "s/PINNED_REVISION/$rev/" enozunu.kdl
   $ GIT_CONFIG_GLOBAL="$PWD/fake-gitconfig" GIT_CONFIG_NOSYSTEM=1 enozunu summon
   assert {
     exit 1
@@ -196,15 +213,22 @@ case "summon reports a gist file escaping the resolved revision" {
   $ ln -s "$PWD/outside.txt" gist-repo/escape.md
   $ git -C gist-repo add escape.md
   $ git -C gist-repo commit --quiet -m escape
-  $ printf '[url "file://%s/gist-repo"]\n\tinsteadOf = https://gist.github.com/2decf6c462d9b4418f2.git\n' "$PWD" > fake-gitconfig
-  write <"enozunu.kdl"> ```
+  $ pwd
+  let workspace <- stdout_line
+  $ git -C gist-repo rev-parse HEAD
+  let rev <- stdout_line
+  write <"fake-gitconfig"> &```
+    [url "file://&{workspace}/gist-repo"]
+      insteadOf = https://gist.github.com/2decf6c462d9b4418f2.git
+    ```
+  write <"enozunu.kdl"> &```
     enozunu config-version=1 {
       provider {
         agents {
           agent "gist-reviewer" {
             gist {
               id "2decf6c462d9b4418f2"
-              revision "PINNED_REVISION"
+              revision "&{rev}"
               file "escape.md"
             }
           }
@@ -217,7 +241,6 @@ case "summon reports a gist file escaping the resolved revision" {
       }
     }
     ```
-  $ rev=$(git -C gist-repo rev-parse HEAD) && sed -i "s/PINNED_REVISION/$rev/" enozunu.kdl
   $ GIT_CONFIG_GLOBAL="$PWD/fake-gitconfig" GIT_CONFIG_NOSYSTEM=1 enozunu summon
   assert {
     exit 1

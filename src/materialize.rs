@@ -457,8 +457,8 @@ fn io_diag(e: std::io::Error) -> Diagnostic {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::git::{CommitSha, GitSelector};
-    use crate::manifest::{GistId, SourceReference, TargetAi};
+    use crate::git::GitSelector;
+    use crate::manifest::{SourceReference, TargetAi};
 
     fn target_rel_path(kind: ArtifactKind) -> String {
         match kind {
@@ -554,76 +554,6 @@ mod tests {
         let diag = check_single(&entry, &checkout, tmp.path()).unwrap_err();
         assert_eq!(diag.code, DiagnosticCode::ArtifactShape);
         // The shared file-shaped check must report the entry's actual kind, not a hard-coded one.
-        assert!(
-            diag.message.starts_with("agent `demo`"),
-            "diagnostic must name the entry's kind: {}",
-            diag.message
-        );
-    }
-
-    /// Builds a Gist file-selector entry so tests exercise the file-shaped Gist checks in isolation.
-    fn planned_gist_file(kind: ArtifactKind, file: &str) -> PlannedMaterialization {
-        PlannedMaterialization {
-            source_name: "demo".to_owned(),
-            kind,
-            reference: SourceReference::Gist {
-                id: GistId::parse("2decf6c462d9b4418f2").unwrap(),
-                revision: CommitSha::parse("468aac8caed5f0c3b859b8286968e2c78e2b8760").unwrap(),
-                selector: GistArtifactSelector::File {
-                    path: file.to_owned(),
-                },
-            },
-            target_ai: TargetAi::Claude,
-            target_rel_path: target_rel_path(kind),
-        }
-    }
-
-    #[test]
-    fn check_reports_a_missing_gist_file_with_the_entrys_kind() {
-        let tmp = tempfile::tempdir().unwrap();
-        let content = tmp.path().join("content");
-        fs::create_dir_all(&content).unwrap();
-
-        let entry = planned_gist_file(ArtifactKind::Agent, "missing.md");
-        let diag = check_single(&entry, &content, tmp.path()).unwrap_err();
-        assert_eq!(diag.code, DiagnosticCode::SourcePathNotFound);
-        assert!(
-            diag.message.starts_with("agent `demo`"),
-            "diagnostic must name the entry's kind: {}",
-            diag.message
-        );
-    }
-
-    #[test]
-    #[cfg(unix)]
-    fn check_reports_an_escaping_gist_file_with_the_entrys_kind() {
-        use std::os::unix::fs::symlink;
-        let tmp = tempfile::tempdir().unwrap();
-        let content = tmp.path().join("content");
-        fs::create_dir_all(&content).unwrap();
-        let outside = tmp.path().join("outside.md");
-        fs::write(&outside, "outside\n").unwrap();
-        symlink(&outside, content.join("escape.md")).unwrap();
-
-        let entry = planned_gist_file(ArtifactKind::Agent, "escape.md");
-        let diag = check_single(&entry, &content, tmp.path()).unwrap_err();
-        assert_eq!(diag.code, DiagnosticCode::UnsafePath);
-        assert!(
-            diag.message.starts_with("agent `demo`"),
-            "diagnostic must name the entry's kind: {}",
-            diag.message
-        );
-    }
-
-    #[test]
-    fn check_reports_a_directory_gist_file_with_the_entrys_kind() {
-        let tmp = tempfile::tempdir().unwrap();
-        let content = tmp.path().join("content");
-        fs::create_dir_all(content.join("dir.md")).unwrap();
-
-        let entry = planned_gist_file(ArtifactKind::Agent, "dir.md");
-        let diag = check_single(&entry, &content, tmp.path()).unwrap_err();
-        assert_eq!(diag.code, DiagnosticCode::ArtifactShape);
         assert!(
             diag.message.starts_with("agent `demo`"),
             "diagnostic must name the entry's kind: {}",

@@ -134,6 +134,8 @@ If `AGENTS.md` is handled later, the following must be considered separately.
 - its artifact kind in the provider model
 - a target-specific declaration for a concept Claude has no counterpart for
 
+The root-file part of this deferral is later decided in [the root repository instructions ADR](20260803T172859Z_generate-root-repository-instructions-from-manifest.md).
+
 ### Update the scope of the earlier Claude-only decision
 
 Earlier ADRs and design documents state that "the v0.0.x target AI is Claude only". That statement is kept as historical record.

@@ -595,6 +595,27 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
+    fn check_reports_an_escaping_gist_file_with_the_entrys_kind() {
+        use std::os::unix::fs::symlink;
+        let tmp = tempfile::tempdir().unwrap();
+        let content = tmp.path().join("content");
+        fs::create_dir_all(&content).unwrap();
+        let outside = tmp.path().join("outside.md");
+        fs::write(&outside, "outside\n").unwrap();
+        symlink(&outside, content.join("escape.md")).unwrap();
+
+        let entry = planned_gist_file(ArtifactKind::Agent, "escape.md");
+        let diag = check_single(&entry, &content, tmp.path()).unwrap_err();
+        assert_eq!(diag.code, DiagnosticCode::UnsafePath);
+        assert!(
+            diag.message.starts_with("agent `demo`"),
+            "diagnostic must name the entry's kind: {}",
+            diag.message
+        );
+    }
+
+    #[test]
     fn check_reports_a_directory_gist_file_with_the_entrys_kind() {
         let tmp = tempfile::tempdir().unwrap();
         let content = tmp.path().join("content");

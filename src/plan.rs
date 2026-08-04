@@ -18,6 +18,13 @@ impl ArtifactKind {
             ArtifactKind::Agent => "agent",
         }
     }
+
+    /// Whether this artifact is one regular file rather than a directory tree.
+    ///
+    /// Shape, not kind, drives the shared source checks and the copy strategy, so a future file-shaped kind (such as a repository instruction, see issue #38) reuses the agent code path instead of adding kind-specific branches, and its diagnostics name the actual kind.
+    pub fn is_file_shaped(&self) -> bool {
+        matches!(self, ArtifactKind::Agent)
+    }
 }
 
 /// One selected source and the project-relative target-AI-native path it materializes to.

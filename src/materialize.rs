@@ -92,10 +92,11 @@ fn check_gist_root_source(
     })
 }
 
-/// Verifies a Gist agent artifact inside its exported content root.
+/// Verifies a file-shaped Gist artifact inside its exported content root.
 ///
 /// A missing file is reported as `SourcePathNotFound` and a non-file artifact as `ArtifactShape`, so a mistyped `file` is distinguished from a `file` that points at a directory.
 /// Containment is enforced after canonicalization, so a symlink whose target escapes the exported content is rejected even though Git transport produced it.
+/// Diagnostics name the entry's actual artifact kind, so a failure of any file-shaped kind is never reported as a different kind's.
 fn check_gist_file_source(
     entry: &PlannedMaterialization,
     file: &str,
@@ -114,8 +115,10 @@ fn check_gist_file_source(
         Diagnostic::new(
             DiagnosticCode::SourcePathNotFound,
             format!(
-                "agent `{}`: gist file `{}` does not exist in the resolved revision",
-                entry.source_name, file
+                "{} `{}`: gist file `{}` does not exist in the resolved revision",
+                entry.kind.as_str(),
+                entry.source_name,
+                file
             ),
         )
     })?;
@@ -125,19 +128,23 @@ fn check_gist_file_source(
         return Err(Diagnostic::new(
             DiagnosticCode::UnsafePath,
             format!(
-                "agent `{}`: gist file `{}` escapes the resolved revision",
-                entry.source_name, file
+                "{} `{}`: gist file `{}` escapes the resolved revision",
+                entry.kind.as_str(),
+                entry.source_name,
+                file
             ),
         ));
     }
 
-    // A Gist agent artifact must be a regular file; `file` pointing at a directory (the Gist root or a subdirectory) is a shape error.
+    // A file-shaped Gist artifact must be a regular file; `file` pointing at a directory (the Gist root or a subdirectory) is a shape error.
     if !source_canon.is_file() {
         return Err(Diagnostic::new(
             DiagnosticCode::ArtifactShape,
             format!(
-                "agent `{}`: gist file `{}` is not a regular file",
-                entry.source_name, file
+                "{} `{}`: gist file `{}` is not a regular file",
+                entry.kind.as_str(),
+                entry.source_name,
+                file
             ),
         ));
     }
@@ -334,41 +341,41 @@ fn check_artifact_shape(
     source_canon: &Path,
     source_path: &str,
 ) -> Result<(), Diagnostic> {
-    match entry.kind {
-        ArtifactKind::Skill => {
-            if !source_canon.is_dir() {
-                return Err(Diagnostic::new(
-                    DiagnosticCode::ArtifactShape,
-                    format!(
-                        "skill `{}`: source path `{}` is not a directory",
-                        entry.source_name, source_path
-                    ),
-                ));
-            }
-            if !source_canon.join("SKILL.md").is_file() {
-                return Err(Diagnostic::new(
-                    DiagnosticCode::ArtifactShape,
-                    format!(
-                        "skill `{}`: source directory `{}` does not contain SKILL.md",
-                        entry.source_name, source_path
-                    ),
-                ));
-            }
-            reject_symlinks(source_canon, &entry.source_name)?;
+    // Every file-shaped kind shares one check, and the report names the entry's actual kind, so a future file-shaped kind's failure is never reported as another kind's.
+    if entry.kind.is_file_shaped() {
+        if !source_canon.is_file() {
+            return Err(Diagnostic::new(
+                DiagnosticCode::ArtifactShape,
+                format!(
+                    "{} `{}`: source path `{}` is not a file",
+                    entry.kind.as_str(),
+                    entry.source_name,
+                    source_path
+                ),
+            ));
         }
-        ArtifactKind::Agent => {
-            if !source_canon.is_file() {
-                return Err(Diagnostic::new(
-                    DiagnosticCode::ArtifactShape,
-                    format!(
-                        "agent `{}`: source path `{}` is not a file",
-                        entry.source_name, source_path
-                    ),
-                ));
-            }
-        }
+        return Ok(());
     }
-    Ok(())
+
+    if !source_canon.is_dir() {
+        return Err(Diagnostic::new(
+            DiagnosticCode::ArtifactShape,
+            format!(
+                "skill `{}`: source path `{}` is not a directory",
+                entry.source_name, source_path
+            ),
+        ));
+    }
+    if !source_canon.join("SKILL.md").is_file() {
+        return Err(Diagnostic::new(
+            DiagnosticCode::ArtifactShape,
+            format!(
+                "skill `{}`: source directory `{}` does not contain SKILL.md",
+                entry.source_name, source_path
+            ),
+        ));
+    }
+    reject_symlinks(source_canon, &entry.source_name)
 }
 
 /// Writes a checked materialization to its target path.
@@ -385,12 +392,11 @@ pub fn execute(checked: &CheckedMaterialization) -> Result<(), Diagnostic> {
         fs::create_dir_all(parent).map_err(io_diag)?;
     }
 
-    match checked.kind {
-        ArtifactKind::Skill => copy_dir(&checked.source_abs, target),
-        ArtifactKind::Agent => {
-            fs::copy(&checked.source_abs, target).map_err(io_diag)?;
-            Ok(())
-        }
+    if checked.kind.is_file_shaped() {
+        fs::copy(&checked.source_abs, target).map_err(io_diag)?;
+        Ok(())
+    } else {
+        copy_dir(&checked.source_abs, target)
     }
 }
 
@@ -451,8 +457,8 @@ fn io_diag(e: std::io::Error) -> Diagnostic {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::git::GitSelector;
-    use crate::manifest::{SourceReference, TargetAi};
+    use crate::git::{CommitSha, GitSelector};
+    use crate::manifest::{GistId, SourceReference, TargetAi};
 
     fn target_rel_path(kind: ArtifactKind) -> String {
         match kind {
@@ -547,6 +553,61 @@ mod tests {
         let entry = planned(ArtifactKind::Agent, "demo.md");
         let diag = check_single(&entry, &checkout, tmp.path()).unwrap_err();
         assert_eq!(diag.code, DiagnosticCode::ArtifactShape);
+        // The shared file-shaped check must report the entry's actual kind, not a hard-coded one.
+        assert!(
+            diag.message.starts_with("agent `demo`"),
+            "diagnostic must name the entry's kind: {}",
+            diag.message
+        );
+    }
+
+    /// Builds a Gist file-selector entry so tests exercise the file-shaped Gist checks in isolation.
+    fn planned_gist_file(kind: ArtifactKind, file: &str) -> PlannedMaterialization {
+        PlannedMaterialization {
+            source_name: "demo".to_owned(),
+            kind,
+            reference: SourceReference::Gist {
+                id: GistId::parse("2decf6c462d9b4418f2").unwrap(),
+                revision: CommitSha::parse("468aac8caed5f0c3b859b8286968e2c78e2b8760").unwrap(),
+                selector: GistArtifactSelector::File {
+                    path: file.to_owned(),
+                },
+            },
+            target_ai: TargetAi::Claude,
+            target_rel_path: target_rel_path(kind),
+        }
+    }
+
+    #[test]
+    fn check_reports_a_missing_gist_file_with_the_entrys_kind() {
+        let tmp = tempfile::tempdir().unwrap();
+        let content = tmp.path().join("content");
+        fs::create_dir_all(&content).unwrap();
+
+        let entry = planned_gist_file(ArtifactKind::Agent, "missing.md");
+        let diag = check_single(&entry, &content, tmp.path()).unwrap_err();
+        assert_eq!(diag.code, DiagnosticCode::SourcePathNotFound);
+        assert!(
+            diag.message.starts_with("agent `demo`"),
+            "diagnostic must name the entry's kind: {}",
+            diag.message
+        );
+    }
+
+    #[test]
+    fn check_reports_a_directory_gist_file_with_the_entrys_kind() {
+        let tmp = tempfile::tempdir().unwrap();
+        let content = tmp.path().join("content");
+        fs::create_dir_all(content.join("dir.md")).unwrap();
+
+        let entry = planned_gist_file(ArtifactKind::Agent, "dir.md");
+        let diag = check_single(&entry, &content, tmp.path()).unwrap_err();
+        assert_eq!(diag.code, DiagnosticCode::ArtifactShape);
+        assert!(
+            diag.message.starts_with("agent `demo`"),
+            "diagnostic must name the entry's kind: {}",
+            diag.message
+        );
     }
 
     #[test]

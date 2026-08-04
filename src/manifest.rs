@@ -55,13 +55,13 @@ pub struct SourceDecl {
 
 /// How a Gist source selects its artifact inside the resolved revision.
 ///
-/// The Skill/agent difference is a typed selector rather than an optional `file`, so a root-selecting Skill Gist can never carry a stray `file` value into resolution or materialization.
-/// The parser guarantees the mapping: `provider.skills` + `gist` produces `Root`, and `provider.agents` + `gist` produces `File`.
+/// The shape difference is a typed selector rather than an optional `file`, so a root-selecting Skill Gist can never carry a stray `file` value into resolution or materialization.
+/// The parser guarantees the mapping: only the directory-shaped `provider.skills` + `gist` produces `Root`; every file-shaped kind (currently `provider.agents`) produces `File`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GistArtifactSelector {
-    /// The root of the pinned Gist revision is the artifact (Skill sources).
+    /// The root of the pinned Gist revision is the artifact (directory-shaped Skill sources).
     Root,
-    /// One file inside the pinned Gist revision is the artifact (agent sources).
+    /// One file inside the pinned Gist revision is the artifact (file-shaped sources).
     File { path: String },
 }
 
@@ -657,8 +657,8 @@ fn parse_gist_reference(
     name: &str,
     diags: &mut Vec<Diagnostic>,
 ) -> Option<SourceReference> {
-    // A Skill Gist selects the pinned revision root, so `file` is part of the agent contract only.
-    let file_supported = kind == "agent";
+    // Only the directory-shaped Skill Gist selects the pinned revision root; every file-shaped kind (currently `agent`) selects one `file` inside it, so a new file-shaped kind inherits this contract instead of adding a kind-specific branch.
+    let file_supported = kind != "skill";
     let accepted_fields = if file_supported {
         "id + revision + file"
     } else {

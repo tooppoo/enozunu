@@ -12,7 +12,7 @@
           "value": "main"
         },
         "path": "common/skills/documentation-writing",
-        "resolved_revision": "96896b8ac00c17ca42dfe226fc87933bc2353839"
+        "resolved_revision": "7de2122fe96a2d2bab61a0600247d316b231ad0a"
       },
       "target_ai": "claude",
       "target_path": ".claude/skills/documentation-writing"
@@ -28,7 +28,7 @@
           "value": "main"
         },
         "path": "common/skills/subagent-review-loop",
-        "resolved_revision": "96896b8ac00c17ca42dfe226fc87933bc2353839"
+        "resolved_revision": "7de2122fe96a2d2bab61a0600247d316b231ad0a"
       },
       "target_ai": "claude",
       "target_path": ".claude/skills/subagent-review-loop"
@@ -44,7 +44,7 @@
           "value": "main"
         },
         "path": "common/skills/code-comment",
-        "resolved_revision": "96896b8ac00c17ca42dfe226fc87933bc2353839"
+        "resolved_revision": "7de2122fe96a2d2bab61a0600247d316b231ad0a"
       },
       "target_ai": "claude",
       "target_path": ".claude/skills/code-comment"
@@ -60,7 +60,7 @@
           "value": "main"
         },
         "path": "common/skills/cli-output-design",
-        "resolved_revision": "96896b8ac00c17ca42dfe226fc87933bc2353839"
+        "resolved_revision": "7de2122fe96a2d2bab61a0600247d316b231ad0a"
       },
       "target_ai": "claude",
       "target_path": ".claude/skills/cli-output-design"
@@ -92,7 +92,7 @@
           "value": "main"
         },
         "path": "common/skills/review-sized-implementation",
-        "resolved_revision": "96896b8ac00c17ca42dfe226fc87933bc2353839"
+        "resolved_revision": "7de2122fe96a2d2bab61a0600247d316b231ad0a"
       },
       "target_ai": "claude",
       "target_path": ".claude/skills/review-sized-implementation"
@@ -108,7 +108,7 @@
           "value": "main"
         },
         "path": "common/skills/documentation-writing",
-        "resolved_revision": "96896b8ac00c17ca42dfe226fc87933bc2353839"
+        "resolved_revision": "7de2122fe96a2d2bab61a0600247d316b231ad0a"
       },
       "target_ai": "codex",
       "target_path": ".agents/skills/documentation-writing"
@@ -124,7 +124,7 @@
           "value": "main"
         },
         "path": "common/skills/subagent-review-loop",
-        "resolved_revision": "96896b8ac00c17ca42dfe226fc87933bc2353839"
+        "resolved_revision": "7de2122fe96a2d2bab61a0600247d316b231ad0a"
       },
       "target_ai": "codex",
       "target_path": ".agents/skills/subagent-review-loop"
@@ -140,7 +140,7 @@
           "value": "main"
         },
         "path": "common/skills/code-comment",
-        "resolved_revision": "96896b8ac00c17ca42dfe226fc87933bc2353839"
+        "resolved_revision": "7de2122fe96a2d2bab61a0600247d316b231ad0a"
       },
       "target_ai": "codex",
       "target_path": ".agents/skills/code-comment"
@@ -156,7 +156,7 @@
           "value": "main"
         },
         "path": "common/skills/cli-output-design",
-        "resolved_revision": "96896b8ac00c17ca42dfe226fc87933bc2353839"
+        "resolved_revision": "7de2122fe96a2d2bab61a0600247d316b231ad0a"
       },
       "target_ai": "codex",
       "target_path": ".agents/skills/cli-output-design"
@@ -188,7 +188,7 @@
           "value": "main"
         },
         "path": "common/skills/review-sized-implementation",
-        "resolved_revision": "96896b8ac00c17ca42dfe226fc87933bc2353839"
+        "resolved_revision": "7de2122fe96a2d2bab61a0600247d316b231ad0a"
       },
       "target_ai": "codex",
       "target_path": ".agents/skills/review-sized-implementation"

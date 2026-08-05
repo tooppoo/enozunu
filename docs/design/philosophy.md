@@ -50,6 +50,8 @@ Enozunu-managed target AI-native directories are generated output.
 
 Target AI-native directories such as `.claude/`, `.agents/`, and `.codex/` may be generated from `enozunu.kdl`. Manual edits inside generated output are not treated as source of truth. Enozunu does not try to preserve, detect, or merge manual edits in generated output.
 
+Root instruction files (`CLAUDE.md` / `AGENTS.md`) generated through `provider.instructions` follow the same non-collaboration rule — they are replaced whole on summon — but the opposite Git convention: they are committed, because target AIs read them before summon can run. The composition stays limited to user-authored content and mechanical projections of manifest declarations; a `when` usage annotation is inserted verbatim and never evaluated, keeping instruction semantics with the target AI. See [the root repository instructions ADR](adr/20260803T172859Z_generate-root-repository-instructions-from-manifest.md) and [the generated output guide](../guide/generated-output.md#root-instruction-files).
+
 If manual editing is required,
 manage the target AI-native directory directly,
 or change the provider-side source that Enozunu materializes.

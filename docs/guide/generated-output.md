@@ -43,6 +43,31 @@ If a project chooses to manually maintain a target AI-native directory,
 that directory should be treated as ordinary project configuration,
 not as Enozunu-generated output.
 
+## Root Instruction Files
+
+When the manifest declares `provider.instructions.<target>`, summon generates the corresponding root instruction file — `CLAUDE.md` for Claude, `AGENTS.md` for Codex — as described in [the manifest format guide](manifest.md#root-instructions).
+
+These files follow the opposite Git convention from the generated directories: commit them.
+Target AIs — including remote agents — read the root instruction files before `enozunu summon` can run, so the committed file is the one that matters at agent startup.
+
+CI can verify that the committed files, the manifest, the lock, and the base documents agree:
+
+```sh
+enozunu summon --frozen
+git diff --exit-code
+```
+
+An empty diff after a frozen summon means the committed instruction files are exactly what the declared sources generate.
+
+Ownership and safety rules:
+
+- Declaring `provider.instructions.<target>` transfers ownership of that root file to Enozunu: an existing regular file or symlink is replaced whole on summon, and manual edits are not preserved, detected, or merged.
+- When adopting the feature on an existing repository, move the hand-written content into a base document first, then declare the source.
+- If a directory occupies the target path, summon fails instead of deleting the directory tree.
+- Removing `provider.instructions.<target>` from the manifest stops Enozunu writing that path, but does not delete the previously generated file; remove stale files explicitly. This matches how deselected Skill and agent targets are not pruned.
+
+The rationale for this ownership and Git-management model is recorded in [the root repository instructions ADR](../design/adr/20260803T172859Z_generate-root-repository-instructions-from-manifest.md).
+
 ## What Regeneration Does to Your Files
 
 Skill directory materialization uses replace semantics, not merge semantics.
@@ -110,7 +135,7 @@ Each entry includes information such as:
 
 Source-specific fields live under the typed `source` object rather than as top-level fields, so entries stay structurally consistent across source kinds.
 
-The `target AI` is `claude` or `codex`. When one source is materialized to both targets in a run, provenance records one entry per target: the `source` object is identical, and the `target AI` and `target path` differ. The `source` object shape does not depend on the target AI.
+The artifact kind is `skill`, `agent`, or `instruction`; an instruction entry's source name is the `provider.instructions` target node name (`claude` / `codex`). The `target AI` is `claude` or `codex`. When one source is materialized to both targets in a run, provenance records one entry per target: the `source` object is identical, and the `target AI` and `target path` differ. The `source` object shape does not depend on the target AI.
 
 For a Git source, the `source` object records:
 
@@ -133,7 +158,7 @@ For a Gist source, the `source` object records:
 - `type` (`"gist"`)
 - `id`
 - `revision`
-- `file` (agent Gists only)
+- `file` (file-shaped Gists: agent and instruction sources)
 
 A Skill Gist materializes the root of the pinned revision, so its `source` object records no `file` key.
 

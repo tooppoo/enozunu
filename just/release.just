@@ -23,3 +23,4 @@ update-version version:
 
   toml set Cargo.toml package.version {{ version }} > Cargo.toml.tmp
   mv Cargo.toml.tmp Cargo.toml
+  cargo c

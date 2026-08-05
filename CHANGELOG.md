@@ -1,5 +1,18 @@
 # CHANGELOG
 
+## 0.2.0
+
+### added
+
+#### cli
+
+<!-- rellog:entry:start -->
+<!-- rellog:body:start -->
+support root instructions management.
+enozunu build AGENTS.md and CLAUDE.md following to enozunu.kdl
+<!-- rellog:body:end -->
+<!-- rellog:entry:end -->
+
 ## 0.1.1
 
 ### added

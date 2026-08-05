@@ -88,9 +88,37 @@ An agent source must resolve to a file. It is materialized into the native agent
 
 Enozunu does not convert between agent formats. A Claude agent is a Markdown file and a Codex custom agent is a TOML file, so the provider declares a target-native source for each. See the [Consumer Block](#consumer-block) section for how each target selects its agent, and [the Claude and Codex materialization ADR](../design/adr/20260711T184657Z_materialize-claude-and-codex-without-semantic-conversion.md) for the responsibility boundary.
 
+### Instruction Source
+
+A base document source for a generated root repository instruction file is declared under `provider.instructions`, keyed by target AI.
+
+```kdl
+instructions {
+  claude {
+    git {
+      url "https://github.com/tooppoo/catalog-agent-tools"
+      branch "main"
+      path "instructions/CLAUDE.base.md"
+    }
+  }
+
+  codex {
+    local { path "AGENTS.base.md" }
+  }
+}
+```
+
+- `provider.instructions` may appear at most once, and each target AI may declare at most one source.
+- Unlike Skills and agents, an instruction source is bound to one target AI and has no user-defined name; diagnostics and provenance identify it by the target node name (`claude` / `codex`).
+- The source must resolve to a regular UTF-8 text file.
+- Declaring `provider.instructions.<target>` is an explicit opt-in that transfers ownership of the corresponding root file (`CLAUDE.md` / `AGENTS.md`) to Enozunu; see [the generated output guide](generated-output.md#root-instruction-files) for the operational consequences.
+- A declared source without a corresponding `consumer` target is not resolved, locked, or materialized, like an unselected Skill.
+
+See [Root Instructions](#root-instructions) for what is generated, and [the root repository instructions ADR](../design/adr/20260803T172859Z_generate-root-repository-instructions-from-manifest.md) for why instruction generation is an Enozunu responsibility and where its boundaries lie.
+
 ## Source Reference Blocks
 
-Each `skill` or `agent` declaration must contain exactly one source reference block.
+Each `skill`, `agent`, or `provider.instructions` target declaration must contain exactly one source reference block.
 
 Supported source reference blocks:
 
@@ -242,9 +270,12 @@ agent "shell-script-reviewer" {
 Required fields:
 
 ```text
-skill: id + revision
-agent: id + revision + file
+skill:       id + revision
+agent:       id + revision + file
+instruction: id + revision + file
 ```
+
+An instruction Gist uses the same file-shaped contract as an agent Gist: `file` selects the base document inside the pinned revision.
 
 Semantics:
 
@@ -349,6 +380,19 @@ claude -> .claude/skills/<name>/
 codex  -> .agents/skills/<name>/
 ```
 
+`use-skills` also has a block form, which names exactly one Skill and attaches usage rules for the generated root instruction file:
+
+```kdl
+use-skills "documentation-writing" {
+  when "updating documentation"
+  when "writing or modifying code comments"
+}
+```
+
+Each `when` is free text describing a usage situation. Enozunu inserts the value verbatim into a fixed sentence in the generated instruction file (see [Root Instructions](#root-instructions)); it never evaluates, parses, or trims it. A `when` value must be a single-line non-empty string without leading or trailing whitespace, and carries no properties or children. Declaring `when` requires the target's `provider.instructions.<target>` source, because the rule exists only in the generated file.
+
+The blockless and block forms mix freely and aggregate in declaration order, per [Selection Node Aggregation](#selection-node-aggregation). Grouping several Skills inside one block is not supported.
+
 ### Agents
 
 `use-agents` selects agent sources by name. Each referenced name must exist under `provider.agents`.
@@ -375,7 +419,33 @@ The target filename suffix is fixed by the target AI. The source path itself is 
 
 Enozunu does not guarantee that a source selected for a target AI is interpreted as intended by that target AI. It projects the source into the target's native path without validating the target-native format. The rationale is recorded in [the Claude and Codex materialization ADR](../design/adr/20260711T184657Z_materialize-claude-and-codex-without-semantic-conversion.md).
 
-Codex `AGENTS.md` is repository instructions rather than a custom agent definition, so it is not part of agent materialization.
+Codex `AGENTS.md` is repository instructions rather than a custom agent definition, so it is not part of agent materialization; it is generated through `provider.instructions.codex` instead (see [Root Instructions](#root-instructions)).
+
+### Root Instructions
+
+When a target declares both a `consumer` block and a `provider.instructions.<target>` source, summon generates that target's root instruction file:
+
+```text
+claude -> CLAUDE.md
+codex  -> AGENTS.md
+```
+
+The output is composed deterministically from these sections, in this order, separated by exactly one blank line and ending with exactly one LF:
+
+1. the fixed marker `<!-- Generated by enozunu. Do not edit directly. -->`
+2. the base document, when non-empty, with line endings normalized to LF
+3. a `## Skill usage` section, present only when the target selects at least one Skill
+
+Each Skill selection produces fixed sentence forms, in selection order, with each selection's `when` values in declaration order:
+
+```markdown
+- Always use the `<skill>` skill.
+- When <when>, always use the `<skill>` skill.
+```
+
+A selection without `when` produces the first form; each `when` produces one independent rule of the second form, with the value inserted verbatim.
+
+Enozunu provides no template syntax, no variable expansion, and no interpretation of instruction content; the composition rules and their boundaries are recorded in [the root repository instructions ADR](../design/adr/20260803T172859Z_generate-root-repository-instructions-from-manifest.md). For ownership, Git management, and pruning behavior of the generated files, see [the generated output guide](generated-output.md#root-instruction-files).
 
 ## Unsupported
 
@@ -391,9 +461,11 @@ SHA-256 repositories
 absolute local paths
 Gist branch, tag, or abbreviated revision selectors
 nested Skill root selection inside a Gist
+nested (sub-directory) instruction files
+template syntax or variable expansion in instruction base documents
 ```
 
-Codex support is limited to Skill and custom agent materialization. `AGENTS.md`, `.codex/config.toml`, and Codex rules, MCP, hooks, and plugins are out of scope.
+Codex support is limited to Skill and custom agent materialization plus root `AGENTS.md` generation. `.codex/config.toml` and Codex rules, MCP, hooks, and plugins are out of scope.
 
 For v0.0.x, Git source references must use the normalized form:
 
@@ -431,6 +503,15 @@ v0.0.x should reject:
 - non-canonical Gist ids
 - revisions that are not exactly 40 lowercase hexadecimal characters
 - unsafe `gist` `file` paths
+- more than one `provider.instructions` block, or more than one source per target
+- unknown target AIs under `provider.instructions`
+- `use-skills` nodes declaring properties, and blockless `use-skills` without a Skill name
+- `use-skills` blocks that do not name exactly one Skill or declare no `when`
+- unknown nodes inside a `use-skills` block
+- `when` values that are empty, carry surrounding whitespace, span multiple lines, or declare properties or children
+- `when` rules whose target has no declared instruction source
+- instruction base documents that are not valid UTF-8
+- a directory occupying a root instruction target path
 
 v0.0.x should not reject a source merely because its URL or path is not under `.claude/`.
 

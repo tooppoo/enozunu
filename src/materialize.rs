@@ -321,9 +321,14 @@ fn check_local_source(
             own_target_abs = Some(target_abs);
         }
     }
-    let target_abs = match own_target_abs {
-        Some(target) => target,
-        None => canonicalize_target(&project_canon.join(&entry.target_rel_path))?,
+    // The root instruction contract replaces a symlink at the target itself (see the root repository instructions ADR); the canonicalized form above is what overlap checking needs, but writing through it would overwrite the symlink's destination — possibly outside the project root — instead of the symlink.
+    let target_abs = if entry.kind == ArtifactKind::Instruction {
+        project_canon.join(&entry.target_rel_path)
+    } else {
+        match own_target_abs {
+            Some(target) => target,
+            None => canonicalize_target(&project_canon.join(&entry.target_rel_path))?,
+        }
     };
 
     check_artifact_shape(entry, &source_canon, source_path)?;
@@ -636,6 +641,60 @@ mod tests {
         assert_eq!(
             fs::read_to_string(tmp.path().join("CLAUDE.md")).unwrap(),
             "generated\n"
+        );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn execute_replaces_a_symlinked_local_instruction_target_and_keeps_the_pointee() {
+        use std::os::unix::fs::symlink;
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(tmp.path().join("base.md"), "# base\n").unwrap();
+        fs::write(tmp.path().join("victim.md"), "must survive\n").unwrap();
+        // A symlinked root target must be replaced itself, never followed to its destination.
+        symlink(tmp.path().join("victim.md"), tmp.path().join("CLAUDE.md")).unwrap();
+
+        let entry = planned_local(ArtifactKind::Instruction, "base.md");
+        let mut checked = check_single(&entry, tmp.path(), tmp.path()).unwrap();
+        checked.rendered = Some("generated\n".to_owned());
+        execute(&checked).unwrap();
+
+        let target = tmp.path().join("CLAUDE.md");
+        assert!(
+            target.symlink_metadata().unwrap().is_file(),
+            "the symlink must become a regular file"
+        );
+        assert_eq!(fs::read_to_string(&target).unwrap(), "generated\n");
+        assert_eq!(
+            fs::read_to_string(tmp.path().join("victim.md")).unwrap(),
+            "must survive\n"
+        );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn execute_replaces_a_symlinked_git_instruction_target_and_keeps_the_pointee() {
+        use std::os::unix::fs::symlink;
+        let tmp = tempfile::tempdir().unwrap();
+        let checkout = tmp.path().join("checkout");
+        fs::create_dir_all(&checkout).unwrap();
+        fs::write(checkout.join("base.md"), "# base\n").unwrap();
+        let project = tmp.path().join("project");
+        fs::create_dir_all(&project).unwrap();
+        fs::write(project.join("victim.md"), "must survive\n").unwrap();
+        symlink(project.join("victim.md"), project.join("CLAUDE.md")).unwrap();
+
+        let entry = planned(ArtifactKind::Instruction, "base.md");
+        let mut checked = check_single(&entry, &checkout, &project).unwrap();
+        checked.rendered = Some("generated\n".to_owned());
+        execute(&checked).unwrap();
+
+        let target = project.join("CLAUDE.md");
+        assert!(target.symlink_metadata().unwrap().is_file());
+        assert_eq!(fs::read_to_string(&target).unwrap(), "generated\n");
+        assert_eq!(
+            fs::read_to_string(project.join("victim.md")).unwrap(),
+            "must survive\n"
         );
     }
 

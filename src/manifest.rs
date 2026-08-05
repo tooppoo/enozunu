@@ -45,6 +45,26 @@ pub struct Manifest {
 pub struct Provider {
     pub skills: Vec<SourceDecl>,
     pub agents: Vec<SourceDecl>,
+    pub instructions: InstructionsDecl,
+}
+
+/// Per-target base document sources for generated root instruction files.
+///
+/// Unlike the shared `skills` / `agents` pools, an instruction source is bound to one target AI, because the artifact itself is target-bound: a root instruction file exists once per target and has no cross-target selection to express. See the root repository instructions ADR (docs/design/adr/20260803T172859Z_generate-root-repository-instructions-from-manifest.md).
+/// A declared source without a corresponding `consumer` target is valid and simply stays unused, matching unselected Skill and agent sources.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct InstructionsDecl {
+    pub claude: Option<SourceReference>,
+    pub codex: Option<SourceReference>,
+}
+
+impl InstructionsDecl {
+    pub fn get(&self, ai: TargetAi) -> Option<&SourceReference> {
+        match ai {
+            TargetAi::Claude => self.claude.as_ref(),
+            TargetAi::Codex => self.codex.as_ref(),
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -56,7 +76,7 @@ pub struct SourceDecl {
 /// How a Gist source selects its artifact inside the resolved revision.
 ///
 /// The shape difference is a typed selector rather than an optional `file`, so a root-selecting Skill Gist can never carry a stray `file` value into resolution or materialization.
-/// The parser guarantees the mapping: only the directory-shaped `provider.skills` + `gist` produces `Root`; every file-shaped kind (currently `provider.agents`) produces `File`.
+/// The parser guarantees the mapping: only the directory-shaped `provider.skills` + `gist` produces `Root`; every file-shaped kind (`provider.agents`, `provider.instructions`) produces `File`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum GistArtifactSelector {
     /// The root of the pinned Gist revision is the artifact (directory-shaped Skill sources).
@@ -191,6 +211,7 @@ pub fn parse(text: &str) -> Result<Manifest, Vec<Diagnostic>> {
     let provider = provider.unwrap_or(Provider {
         skills: Vec::new(),
         agents: Vec::new(),
+        instructions: InstructionsDecl::default(),
     });
     let consumer = match consumer {
         Some(c) => c,
@@ -244,12 +265,24 @@ fn check_config_version(root: &KdlNode, diags: &mut Vec<Diagnostic>) {
 fn parse_provider(node: &KdlNode, diags: &mut Vec<Diagnostic>) -> Provider {
     let mut skills = Vec::new();
     let mut agents = Vec::new();
+    let mut instructions = None;
 
     if let Some(children) = node.children() {
         for child in children.nodes() {
             match child.name().value() {
                 "skills" => skills = parse_source_decls(child, "skill", diags),
                 "agents" => agents = parse_source_decls(child, "agent", diags),
+                "instructions" => {
+                    // A repeated block is a shape error rather than last-wins, so a manifest cannot silently generate from a different base document than the one it appears to declare.
+                    if instructions.is_some() {
+                        diags.push(Diagnostic::new(
+                            DiagnosticCode::ManifestShape,
+                            "`provider.instructions` is declared more than once",
+                        ));
+                    } else {
+                        instructions = Some(parse_instructions(child, diags));
+                    }
+                }
                 other => diags.push(Diagnostic::new(
                     DiagnosticCode::ManifestShape,
                     format!("unknown block `{other}` under `provider`"),
@@ -258,7 +291,61 @@ fn parse_provider(node: &KdlNode, diags: &mut Vec<Diagnostic>) -> Provider {
         }
     }
 
-    Provider { skills, agents }
+    Provider {
+        skills,
+        agents,
+        instructions: instructions.unwrap_or_default(),
+    }
+}
+
+/// Parses `provider.instructions`: at most one base document source per target AI.
+///
+/// The child node name doubles as the source's diagnostic and provenance identity (`instruction `claude``), because an instruction declaration has no user-defined name.
+fn parse_instructions(node: &KdlNode, diags: &mut Vec<Diagnostic>) -> InstructionsDecl {
+    let mut decl = InstructionsDecl::default();
+
+    if first_string_arg(node).is_some() {
+        diags.push(Diagnostic::new(
+            DiagnosticCode::ManifestShape,
+            "`provider.instructions` takes no argument",
+        ));
+    }
+
+    if let Some(children) = node.children() {
+        for child in children.nodes() {
+            let target = child.name().value();
+            let slot = match target {
+                "claude" => &mut decl.claude,
+                "codex" => &mut decl.codex,
+                other => {
+                    diags.push(Diagnostic::new(
+                        DiagnosticCode::UnsupportedConsumer,
+                        format!(
+                            "`provider.instructions.{other}` is not a supported target AI; supported target AIs are `claude` and `codex`"
+                        ),
+                    ));
+                    continue;
+                }
+            };
+            if first_string_arg(child).is_some() {
+                diags.push(Diagnostic::new(
+                    DiagnosticCode::ManifestShape,
+                    format!("`provider.instructions.{target}` takes no argument"),
+                ));
+                continue;
+            }
+            if slot.is_some() {
+                diags.push(Diagnostic::new(
+                    DiagnosticCode::ManifestShape,
+                    format!("`provider.instructions.{target}` is declared more than once"),
+                ));
+                continue;
+            }
+            *slot = parse_source_reference(child, "instruction", target, diags);
+        }
+    }
+
+    decl
 }
 
 fn parse_source_decls(node: &KdlNode, kind: &str, diags: &mut Vec<Diagnostic>) -> Vec<SourceDecl> {
@@ -667,7 +754,7 @@ fn parse_gist_reference(
     name: &str,
     diags: &mut Vec<Diagnostic>,
 ) -> Option<SourceReference> {
-    // Only the directory-shaped Skill Gist selects the pinned revision root; every file-shaped kind (currently `agent`) selects one `file` inside it, so a new file-shaped kind inherits this contract instead of adding a kind-specific branch.
+    // Only the directory-shaped Skill Gist selects the pinned revision root; every file-shaped kind (`agent`, `instruction`) selects one `file` inside it, so a new file-shaped kind inherits this contract instead of adding a kind-specific branch.
     let file_supported = kind != "skill";
     let accepted_fields = if file_supported {
         "id + revision + file"
@@ -830,14 +917,7 @@ fn parse_target_consumer(
                 // A `use-skills` / `use-agents` node declares selections; it is not a value later nodes override.
                 // Nodes concatenate in declaration order, so the grouped form (`use-skills "a" "b"`) and the split form (`use-skills "a"` + `use-skills "b"`) parse identically and node boundaries carry no meaning after parse.
                 // A name repeated across nodes therefore collides on its target path at plan time, the same as repeating it inside one node.
-                "use-skills" => {
-                    use_skills.extend(string_args(child, "use-skills", diags).into_iter().map(
-                        |name| SkillUsage {
-                            name,
-                            whens: Vec::new(),
-                        },
-                    ))
-                }
+                "use-skills" => use_skills.extend(parse_use_skills(child, target, diags)),
                 "use-agents" => use_agents.extend(string_args(child, "use-agents", diags)),
                 other => diags.push(Diagnostic::new(
                     DiagnosticCode::ManifestShape,
@@ -851,6 +931,142 @@ fn parse_target_consumer(
         use_skills,
         use_agents,
     }
+}
+
+/// Parses one `use-skills` node into `SkillUsage` declarations.
+///
+/// The blockless form selects one or more Skill names with no usage annotation.
+/// The block form (`use-skills "name" { when "..." }`) names exactly one Skill and attaches one usage rule per `when`; grouping several Skills under one block is deliberately unsupported (issue #38).
+/// Properties are rejected in both forms, so a mistyped `use-skills skill="a"` cannot silently select nothing.
+fn parse_use_skills(node: &KdlNode, target: &str, diags: &mut Vec<Diagnostic>) -> Vec<SkillUsage> {
+    if node.entries().iter().any(|e| e.name().is_some()) {
+        diags.push(Diagnostic::new(
+            DiagnosticCode::ManifestShape,
+            format!("`use-skills` under `consumer.{target}` must not declare properties"),
+        ));
+        return Vec::new();
+    }
+
+    let names = string_args(node, "use-skills", diags);
+
+    let Some(children) = node.children() else {
+        if names.is_empty() {
+            diags.push(Diagnostic::new(
+                DiagnosticCode::ManifestShape,
+                format!(
+                    "`use-skills` under `consumer.{target}` must select at least one Skill name"
+                ),
+            ));
+        }
+        return names
+            .into_iter()
+            .map(|name| SkillUsage {
+                name,
+                whens: Vec::new(),
+            })
+            .collect();
+    };
+
+    if names.len() != 1 {
+        diags.push(Diagnostic::new(
+            DiagnosticCode::ManifestShape,
+            format!(
+                "a `use-skills` block under `consumer.{target}` must name exactly one Skill, but {} are named",
+                names.len()
+            ),
+        ));
+        return Vec::new();
+    }
+
+    let mut whens = Vec::new();
+    let mut ok = true;
+    for child in children.nodes() {
+        if child.name().value() != "when" {
+            diags.push(Diagnostic::new(
+                DiagnosticCode::ManifestShape,
+                format!(
+                    "unknown node `{}` inside a `use-skills` block under `consumer.{target}`; only `when` is allowed",
+                    child.name().value()
+                ),
+            ));
+            ok = false;
+            continue;
+        }
+        match parse_when(child, target, diags) {
+            Some(when) => whens.push(when),
+            None => ok = false,
+        }
+    }
+
+    if ok && whens.is_empty() {
+        diags.push(Diagnostic::new(
+            DiagnosticCode::ManifestShape,
+            format!(
+                "a `use-skills` block under `consumer.{target}` must declare at least one `when`"
+            ),
+        ));
+        ok = false;
+    }
+
+    if !ok {
+        return Vec::new();
+    }
+
+    vec![SkillUsage {
+        name: names
+            .into_iter()
+            .next()
+            .expect("exactly one name was checked above"),
+        whens,
+    }]
+}
+
+/// Validates the `when` contract fixed by issue #38.
+///
+/// A `when` value is free text inserted verbatim into a generated usage rule, so the contract is purely lexical: exactly one single-line string argument with no surrounding whitespace, and no properties or children.
+/// Surrounding whitespace is rejected rather than trimmed, because silently rewriting the value would contradict verbatim insertion.
+/// The natural-language content is deliberately not inspected.
+fn parse_when(node: &KdlNode, target: &str, diags: &mut Vec<Diagnostic>) -> Option<String> {
+    let mut fail = |detail: &str| {
+        diags.push(Diagnostic::new(
+            DiagnosticCode::ManifestShape,
+            format!("`when` under `consumer.{target}` {detail}"),
+        ));
+        None
+    };
+
+    if node.entries().iter().any(|e| e.name().is_some()) {
+        return fail("must not declare properties");
+    }
+    if node.children().is_some() {
+        return fail("must not have children");
+    }
+
+    let positional: Vec<_> = node
+        .entries()
+        .iter()
+        .filter(|e| e.name().is_none())
+        .collect();
+    let [entry] = positional.as_slice() else {
+        return fail("must have exactly one argument");
+    };
+    let Some(value) = entry.value().as_string() else {
+        return fail("must have a string argument");
+    };
+
+    if value.trim().is_empty() {
+        return fail("must not be empty");
+    }
+    if value.contains(['\r', '\n']) {
+        return fail("must be a single line without CR or LF");
+    }
+    if value != value.trim() {
+        return fail(
+            "must not have leading or trailing whitespace; the value is inserted verbatim and never trimmed",
+        );
+    }
+
+    Some(value.to_owned())
 }
 
 fn validate_references(manifest: &Manifest, diags: &mut Vec<Diagnostic>) {
@@ -877,6 +1093,18 @@ fn validate_references(manifest: &Manifest, diags: &mut Vec<Diagnostic>) {
                     ),
                 ));
             }
+        }
+
+        // A `when` rule only exists in the generated instruction file, so annotating a selection without the target's base document source would accept syntax the pipeline then ignores.
+        if consumer.use_skills.iter().any(|u| !u.whens.is_empty())
+            && manifest.provider.instructions.get(ai).is_none()
+        {
+            diags.push(Diagnostic::new(
+                DiagnosticCode::ManifestShape,
+                format!(
+                    "`consumer.{target}` declares `when` usage rules, but `provider.instructions.{target}` is not declared"
+                ),
+            ));
         }
     }
 }
@@ -1843,6 +2071,321 @@ enozunu config-version=1 {
 }
 "#;
         assert!(codes(parse(text)).contains(&DiagnosticCode::UnsupportedSourceReference));
+    }
+
+    /// Wraps `provider.instructions` children and consumer children in a manifest declaring skill `a`, so tests exercise instruction and `when` parsing together.
+    fn manifest_with_instructions(instructions_body: &str, claude_body: &str) -> String {
+        format!(
+            r#"
+enozunu config-version=1 {{
+  provider {{
+    skills {{
+      skill "a" {{ git {{ url "https://example.com/r"; branch "main"; path "s/a" }} }}
+    }}
+    instructions {{
+{instructions_body}
+    }}
+  }}
+  consumer {{
+    claude {{
+{claude_body}
+    }}
+  }}
+}}
+"#
+        )
+    }
+
+    const CLAUDE_LOCAL_INSTRUCTION: &str = r#"      claude { local { path "CLAUDE.base.md" } }"#;
+
+    #[test]
+    fn parses_instruction_sources_per_target() {
+        let text = r#"
+enozunu config-version=1 {
+  provider {
+    instructions {
+      claude { git { url "https://example.com/r"; branch "main"; path "instructions/CLAUDE.base.md" } }
+      codex { local { path "AGENTS.base.md" } }
+    }
+  }
+  consumer { claude {} }
+}
+"#;
+        let manifest = parse(text).unwrap();
+        assert_eq!(
+            manifest.provider.instructions.claude,
+            Some(SourceReference::Git {
+                url: "https://example.com/r".to_owned(),
+                selector: GitSelector::Branch("main".to_owned()),
+                path: "instructions/CLAUDE.base.md".to_owned(),
+            })
+        );
+        assert_eq!(
+            manifest.provider.instructions.codex,
+            Some(SourceReference::Local {
+                path: "AGENTS.base.md".to_owned(),
+            })
+        );
+    }
+
+    #[test]
+    fn parses_an_instruction_gist_with_the_file_shaped_contract() {
+        let text = manifest_with_instructions(
+            r#"      claude {
+        gist {
+          id "2decf6c462d9b4418f2"
+          revision "468aac8caed5f0c3b859b8286968e2c78e2b8760"
+          file "CLAUDE.base.md"
+        }
+      }"#,
+            r#"      use-skills "a""#,
+        );
+        let manifest = parse(&text).unwrap();
+        let Some(SourceReference::Gist { selector, .. }) = &manifest.provider.instructions.claude
+        else {
+            panic!("expected a gist instruction source");
+        };
+        assert_eq!(
+            selector,
+            &GistArtifactSelector::File {
+                path: "CLAUDE.base.md".to_owned()
+            }
+        );
+    }
+
+    #[test]
+    fn reports_an_instruction_gist_missing_file_as_instruction_not_agent() {
+        // The file-shaped contract is shared with agents, but the report must name the actual kind.
+        let text = manifest_with_instructions(
+            r#"      claude {
+        gist {
+          id "2decf6c462d9b4418f2"
+          revision "468aac8caed5f0c3b859b8286968e2c78e2b8760"
+        }
+      }"#,
+            r#"      use-skills "a""#,
+        );
+        let messages = messages(parse(&text));
+        assert!(
+            messages
+                .iter()
+                .any(|m| m.contains("instruction `claude`") && m.contains("`file`")),
+            "missing `file` must be reported for `instruction `claude``: {messages:?}"
+        );
+        assert!(
+            messages.iter().all(|m| !m.contains("agent `")),
+            "an instruction failure must not be reported as an agent's: {messages:?}"
+        );
+    }
+
+    #[test]
+    fn rejects_a_duplicate_instructions_block() {
+        let text = r#"
+enozunu config-version=1 {
+  provider {
+    instructions { claude { local { path "a.md" } } }
+    instructions { codex { local { path "b.md" } } }
+  }
+  consumer { claude {} }
+}
+"#;
+        assert!(codes(parse(text)).contains(&DiagnosticCode::ManifestShape));
+    }
+
+    #[test]
+    fn rejects_a_duplicate_instruction_target() {
+        let text = manifest_with_instructions(
+            r#"      claude { local { path "a.md" } }
+      claude { local { path "b.md" } }"#,
+            "",
+        );
+        assert!(codes(parse(&text)).contains(&DiagnosticCode::ManifestShape));
+    }
+
+    #[test]
+    fn rejects_an_unknown_instruction_target() {
+        let text = manifest_with_instructions(r#"      gemini { local { path "a.md" } }"#, "");
+        assert!(codes(parse(&text)).contains(&DiagnosticCode::UnsupportedConsumer));
+    }
+
+    #[test]
+    fn rejects_an_instruction_target_without_a_source_reference() {
+        let text = manifest_with_instructions(r#"      claude {}"#, "");
+        assert!(codes(parse(&text)).contains(&DiagnosticCode::ManifestShape));
+    }
+
+    #[test]
+    fn rejects_arguments_on_instruction_nodes() {
+        for body in [r#"      claude "x" { local { path "a.md" } }"#] {
+            let text = manifest_with_instructions(body, "");
+            assert!(
+                codes(parse(&text)).contains(&DiagnosticCode::ManifestShape),
+                "instruction node argument must be rejected: {body}"
+            );
+        }
+    }
+
+    #[test]
+    fn parses_a_use_skills_block_with_multiple_whens_in_order() {
+        let text = manifest_with_instructions(
+            CLAUDE_LOCAL_INSTRUCTION,
+            r#"      use-skills "a" {
+        when "updating documentation"
+        when "writing or modifying code comments"
+      }"#,
+        );
+        let manifest = parse(&text).unwrap();
+        let claude = manifest.consumer.claude.as_ref().unwrap();
+        assert_eq!(
+            claude.use_skills,
+            [SkillUsage {
+                name: "a".to_owned(),
+                whens: vec![
+                    "updating documentation".to_owned(),
+                    "writing or modifying code comments".to_owned(),
+                ],
+            }]
+        );
+    }
+
+    #[test]
+    fn rejects_a_use_skills_block_naming_zero_or_multiple_skills() {
+        for selection in [
+            r#"      use-skills { when "x" }"#,
+            r#"      use-skills "a" "a2" { when "x" }"#,
+        ] {
+            let text = manifest_with_instructions(CLAUDE_LOCAL_INSTRUCTION, selection);
+            assert!(
+                codes(parse(&text)).contains(&DiagnosticCode::ManifestShape),
+                "block form with wrong name count must be rejected: {selection}"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_a_use_skills_block_without_a_when() {
+        let text =
+            manifest_with_instructions(CLAUDE_LOCAL_INSTRUCTION, r#"      use-skills "a" {}"#);
+        assert!(codes(parse(&text)).contains(&DiagnosticCode::ManifestShape));
+    }
+
+    #[test]
+    fn rejects_an_unknown_node_inside_a_use_skills_block() {
+        let text = manifest_with_instructions(
+            CLAUDE_LOCAL_INSTRUCTION,
+            r#"      use-skills "a" { condition "x" }"#,
+        );
+        assert!(codes(parse(&text)).contains(&DiagnosticCode::ManifestShape));
+    }
+
+    #[test]
+    fn rejects_use_skills_properties_in_both_forms() {
+        for selection in [
+            r#"      use-skills skill="a""#,
+            r#"      use-skills "a" priority="high" { when "x" }"#,
+        ] {
+            let text = manifest_with_instructions(CLAUDE_LOCAL_INSTRUCTION, selection);
+            assert!(
+                codes(parse(&text)).contains(&DiagnosticCode::ManifestShape),
+                "use-skills property must be rejected: {selection}"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_a_blockless_use_skills_without_names() {
+        let text = manifest_with_instructions(CLAUDE_LOCAL_INSTRUCTION, r#"      use-skills"#);
+        assert!(codes(parse(&text)).contains(&DiagnosticCode::ManifestShape));
+    }
+
+    #[test]
+    fn rejects_when_contract_violations() {
+        for when in [
+            r#"when"#,                    // no argument
+            r#"when "x" "y""#,            // two arguments
+            r#"when 1"#,                  // non-string
+            r#"when """#,                 // empty
+            r#"when "   ""#,              // whitespace-only
+            r#"when " padded""#,          // leading whitespace
+            r#"when "padded ""#,          // trailing whitespace
+            r#"when "multi\nline""#,      // LF
+            r#"when "carriage\rreturn""#, // CR
+            r#"when "x" lang="en""#,      // property
+            r#"when "x" { nested "y" }"#, // children
+        ] {
+            let text = manifest_with_instructions(
+                CLAUDE_LOCAL_INSTRUCTION,
+                &format!(
+                    r#"      use-skills "a" {{
+        {when}
+      }}"#
+                ),
+            );
+            assert!(
+                codes(parse(&text)).contains(&DiagnosticCode::ManifestShape),
+                "`{when}` must be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_when_rules_without_a_declared_instruction_source() {
+        let text = manifest_with_instructions(
+            "",
+            r#"      use-skills "a" {
+        when "updating documentation"
+      }"#,
+        );
+        let messages = messages(parse(&text));
+        assert!(
+            messages
+                .iter()
+                .any(|m| m.contains("`provider.instructions.claude` is not declared")),
+            "{messages:?}"
+        );
+    }
+
+    #[test]
+    fn accepts_instruction_sources_without_a_consumer() {
+        // A declared source without a consumer stays unused, like an unselected Skill.
+        let text = r#"
+enozunu config-version=1 {
+  provider {
+    instructions { codex { local { path "AGENTS.base.md" } } }
+  }
+  consumer { claude {} }
+}
+"#;
+        assert!(parse(text).is_ok());
+    }
+
+    #[test]
+    fn keeps_declaration_order_across_blockless_and_block_forms() {
+        let text = r#"
+enozunu config-version=1 {
+  provider {
+    skills {
+      skill "a" { git { url "https://example.com/r"; branch "main"; path "s/a" } }
+      skill "b" { git { url "https://example.com/r"; branch "main"; path "s/b" } }
+      skill "c" { git { url "https://example.com/r"; branch "main"; path "s/c" } }
+    }
+    instructions { claude { local { path "CLAUDE.base.md" } } }
+  }
+  consumer {
+    claude {
+      use-skills "a"
+      use-skills "b" { when "reviewing" }
+      use-skills "c"
+    }
+  }
+}
+"#;
+        let manifest = parse(text).unwrap();
+        let claude = manifest.consumer.claude.as_ref().unwrap();
+        assert_eq!(skill_names(claude), ["a", "b", "c"]);
+        assert_eq!(claude.use_skills[1].whens, ["reviewing"]);
+        assert!(claude.use_skills[0].whens.is_empty());
+        assert!(claude.use_skills[2].whens.is_empty());
     }
 
     /// Wraps a `gist { ... }` block body in an agent declaration, without selecting it, so tests exercise gist parsing in isolation.

@@ -9,6 +9,8 @@ use crate::manifest::{Manifest, SourceReference, TargetAi, TargetConsumer};
 pub enum ArtifactKind {
     Skill,
     Agent,
+    /// A generated root repository instruction file (`CLAUDE.md` / `AGENTS.md`), composed from a base document source and the target's Skill usage rules instead of copied verbatim.
+    Instruction,
 }
 
 impl ArtifactKind {
@@ -16,17 +18,18 @@ impl ArtifactKind {
         match self {
             ArtifactKind::Skill => "skill",
             ArtifactKind::Agent => "agent",
+            ArtifactKind::Instruction => "instruction",
         }
     }
 
     /// Whether this artifact is one regular file rather than a directory tree.
     ///
-    /// Shape, not kind, drives the shared source checks and the copy strategy, so a future file-shaped kind (such as a repository instruction, see issue #38) reuses the agent code path instead of adding kind-specific branches, and its diagnostics name the actual kind.
+    /// Shape, not kind, drives the shared source checks, so a file-shaped kind reuses one code path and its diagnostics name the actual kind.
     /// The match is exhaustive on purpose: adding a kind must force an explicit shape decision here, because a silently defaulted shape would send the new kind down the directory branch with another kind's wording.
     pub fn is_file_shaped(&self) -> bool {
         match self {
             ArtifactKind::Skill => false,
-            ArtifactKind::Agent => true,
+            ArtifactKind::Agent | ArtifactKind::Instruction => true,
         }
     }
 }
@@ -51,6 +54,9 @@ fn target_rel_path(target: TargetAi, kind: ArtifactKind, name: &str) -> String {
         (TargetAi::Claude, ArtifactKind::Agent) => format!(".claude/agents/{name}.md"),
         (TargetAi::Codex, ArtifactKind::Skill) => format!(".agents/skills/{name}"),
         (TargetAi::Codex, ArtifactKind::Agent) => format!(".codex/agents/{name}.toml"),
+        // The root instruction file is one fixed path per target; the declaration has no user-defined name.
+        (TargetAi::Claude, ArtifactKind::Instruction) => "CLAUDE.md".to_owned(),
+        (TargetAi::Codex, ArtifactKind::Instruction) => "AGENTS.md".to_owned(),
     }
 }
 
@@ -122,6 +128,18 @@ fn plan_target(
             reference: decl.reference.clone(),
             target_ai: target,
             target_rel_path: target_rel_path(target, ArtifactKind::Agent, &decl.name),
+        });
+    }
+
+    // An instruction materializes only when both sides opted in: the target consumer exists (this function runs per declared target) and its base document source is declared. A source without a consumer stays unresolved, like an unselected Skill.
+    if let Some(reference) = manifest.provider.instructions.get(target) {
+        planned.push(PlannedMaterialization {
+            // The declaration has no user-defined name, so the provider child node name is the source identity, in diagnostics and provenance alike.
+            source_name: target.as_str().to_owned(),
+            kind: ArtifactKind::Instruction,
+            reference: reference.clone(),
+            target_ai: target,
+            target_rel_path: target_rel_path(target, ArtifactKind::Instruction, target.as_str()),
         });
     }
 }
@@ -336,6 +354,79 @@ enozunu config-version=1 {
         assert_eq!(planned[0].target_rel_path, ".claude/skills/demo");
         assert_eq!(planned[1].target_ai, TargetAi::Codex);
         assert_eq!(planned[1].target_rel_path, ".agents/skills/demo");
+    }
+
+    #[test]
+    fn plans_instructions_for_declared_targets_only() {
+        let text = r#"
+enozunu config-version=1 {
+  provider {
+    skills {
+      skill "a" { git { url "https://example.com/r"; branch "main"; path "s/a" } }
+    }
+    instructions {
+      claude { local { path "CLAUDE.base.md" } }
+      codex { local { path "AGENTS.base.md" } }
+    }
+  }
+  consumer {
+    claude {
+      use-skills "a"
+    }
+  }
+}
+"#;
+        let planned = plan(&manifest::parse(text).unwrap()).unwrap();
+        // Only Claude declared a consumer, so only the Claude instruction is planned; the codex source stays unused.
+        assert_eq!(
+            planned
+                .iter()
+                .map(|e| e.target_rel_path.as_str())
+                .collect::<Vec<_>>(),
+            [".claude/skills/a", "CLAUDE.md"]
+        );
+        let instruction = &planned[1];
+        assert_eq!(instruction.kind, ArtifactKind::Instruction);
+        assert_eq!(instruction.source_name, "claude");
+        assert_eq!(instruction.target_ai, TargetAi::Claude);
+    }
+
+    #[test]
+    fn plans_the_codex_instruction_to_agents_md() {
+        let text = r#"
+enozunu config-version=1 {
+  provider {
+    instructions {
+      codex { local { path "AGENTS.base.md" } }
+    }
+  }
+  consumer {
+    codex {}
+  }
+}
+"#;
+        let planned = plan(&manifest::parse(text).unwrap()).unwrap();
+        assert_eq!(planned.len(), 1);
+        assert_eq!(planned[0].target_rel_path, "AGENTS.md");
+        assert_eq!(planned[0].source_name, "codex");
+    }
+
+    #[test]
+    fn plans_no_instruction_without_a_declared_source() {
+        let text = r#"
+enozunu config-version=1 {
+  provider {
+    skills {
+      skill "a" { git { url "https://example.com/r"; branch "main"; path "s/a" } }
+    }
+  }
+  consumer {
+    claude { use-skills "a" }
+  }
+}
+"#;
+        let planned = plan(&manifest::parse(text).unwrap()).unwrap();
+        assert!(planned.iter().all(|e| e.kind != ArtifactKind::Instruction));
     }
 
     #[test]

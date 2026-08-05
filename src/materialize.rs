@@ -18,6 +18,10 @@ pub struct CheckedMaterialization {
     pub source_abs: PathBuf,
     pub target_abs: PathBuf,
     pub kind: ArtifactKind,
+    /// Pre-rendered file content for instruction artifacts; `None` materializes the source verbatim.
+    ///
+    /// The pipeline renders instructions during the check phase — before the first target write — so a decode or render failure cannot leave any target half-updated.
+    pub rendered: Option<String>,
 }
 
 /// Verifies the source artifact for `entry` without touching the target.
@@ -25,6 +29,35 @@ pub struct CheckedMaterialization {
 /// `source_base` is the exported content root for Git and Gist references and the manifest file's containing directory for local references.
 /// `planned_target_rel_paths` lists every target path the current run will write; local sources are checked for overlap against all of them, because any of those writes could destroy an overlapping local source mid-run.
 pub fn check(
+    entry: &PlannedMaterialization,
+    source_base: &Path,
+    project_root: &Path,
+    planned_target_rel_paths: &[String],
+) -> Result<CheckedMaterialization, Diagnostic> {
+    let checked = check_source(entry, source_base, project_root, planned_target_rel_paths)?;
+
+    // A root instruction file replaces an existing regular file or symlink under its declared ownership, but never a directory: deleting a directory tree to place a generated file exceeds that ownership, so summon fails instead.
+    if entry.kind == ArtifactKind::Instruction
+        && checked
+            .target_abs
+            .symlink_metadata()
+            .is_ok_and(|m| m.is_dir())
+    {
+        return Err(Diagnostic::new(
+            DiagnosticCode::UnsafePath,
+            format!(
+                "{} `{}`: target path `{}` is a directory; refusing to replace a directory with a generated file; remove or relocate the directory, then rerun `enozunu summon`",
+                entry.kind.as_str(),
+                entry.source_name,
+                entry.target_rel_path
+            ),
+        ));
+    }
+
+    Ok(checked)
+}
+
+fn check_source(
     entry: &PlannedMaterialization,
     source_base: &Path,
     project_root: &Path,
@@ -89,6 +122,7 @@ fn check_gist_root_source(
         source_abs: root_canon,
         target_abs: project_root.join(&entry.target_rel_path),
         kind: entry.kind,
+        rendered: None,
     })
 }
 
@@ -153,6 +187,7 @@ fn check_gist_file_source(
         source_abs: source_canon,
         target_abs: project_root.join(&entry.target_rel_path),
         kind: entry.kind,
+        rendered: None,
     })
 }
 
@@ -201,6 +236,7 @@ fn check_git_source(
         source_abs: source_canon,
         target_abs: project_root.join(&entry.target_rel_path),
         kind: entry.kind,
+        rendered: None,
     })
 }
 
@@ -285,9 +321,14 @@ fn check_local_source(
             own_target_abs = Some(target_abs);
         }
     }
-    let target_abs = match own_target_abs {
-        Some(target) => target,
-        None => canonicalize_target(&project_canon.join(&entry.target_rel_path))?,
+    // The root instruction contract replaces a symlink at the target itself (see the root repository instructions ADR); the canonicalized form above is what overlap checking needs, but writing through it would overwrite the symlink's destination — possibly outside the project root — instead of the symlink.
+    let target_abs = if entry.kind == ArtifactKind::Instruction {
+        project_canon.join(&entry.target_rel_path)
+    } else {
+        match own_target_abs {
+            Some(target) => target,
+            None => canonicalize_target(&project_canon.join(&entry.target_rel_path))?,
+        }
     };
 
     check_artifact_shape(entry, &source_canon, source_path)?;
@@ -296,6 +337,7 @@ fn check_local_source(
         source_abs: source_canon,
         target_abs,
         kind: entry.kind,
+        rendered: None,
     })
 }
 
@@ -392,7 +434,9 @@ pub fn execute(checked: &CheckedMaterialization) -> Result<(), Diagnostic> {
         fs::create_dir_all(parent).map_err(io_diag)?;
     }
 
-    if checked.kind.is_file_shaped() {
+    if let Some(content) = &checked.rendered {
+        fs::write(target, content).map_err(io_diag)
+    } else if checked.kind.is_file_shaped() {
         fs::copy(&checked.source_abs, target).map_err(io_diag)?;
         Ok(())
     } else {
@@ -464,6 +508,7 @@ mod tests {
         match kind {
             ArtifactKind::Skill => ".claude/skills/demo".to_owned(),
             ArtifactKind::Agent => ".claude/agents/demo.md".to_owned(),
+            ArtifactKind::Instruction => "CLAUDE.md".to_owned(),
         }
     }
 
@@ -558,6 +603,98 @@ mod tests {
             diag.message.starts_with("agent `demo`"),
             "diagnostic must name the entry's kind: {}",
             diag.message
+        );
+    }
+
+    #[test]
+    fn check_rejects_an_instruction_target_that_is_a_directory() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(tmp.path().join("base.md"), "# base\n").unwrap();
+        // A directory occupies the root instruction path; replacing it would require deleting a tree.
+        fs::create_dir_all(tmp.path().join("CLAUDE.md")).unwrap();
+
+        let entry = planned_local(ArtifactKind::Instruction, "base.md");
+        let diag = check_single(&entry, tmp.path(), tmp.path()).unwrap_err();
+        assert_eq!(diag.code, DiagnosticCode::UnsafePath);
+        assert!(
+            diag.message.starts_with("instruction `demo`"),
+            "diagnostic must name the entry's kind: {}",
+            diag.message
+        );
+        assert!(
+            tmp.path().join("CLAUDE.md").is_dir(),
+            "the directory must survive"
+        );
+    }
+
+    #[test]
+    fn check_replaces_an_instruction_target_that_is_a_regular_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(tmp.path().join("base.md"), "# base\n").unwrap();
+        fs::write(tmp.path().join("CLAUDE.md"), "old hand-written content\n").unwrap();
+
+        let entry = planned_local(ArtifactKind::Instruction, "base.md");
+        let mut checked = check_single(&entry, tmp.path(), tmp.path()).unwrap();
+        checked.rendered = Some("generated\n".to_owned());
+        execute(&checked).unwrap();
+
+        assert_eq!(
+            fs::read_to_string(tmp.path().join("CLAUDE.md")).unwrap(),
+            "generated\n"
+        );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn execute_replaces_a_symlinked_local_instruction_target_and_keeps_the_pointee() {
+        use std::os::unix::fs::symlink;
+        let tmp = tempfile::tempdir().unwrap();
+        fs::write(tmp.path().join("base.md"), "# base\n").unwrap();
+        fs::write(tmp.path().join("victim.md"), "must survive\n").unwrap();
+        // A symlinked root target must be replaced itself, never followed to its destination.
+        symlink(tmp.path().join("victim.md"), tmp.path().join("CLAUDE.md")).unwrap();
+
+        let entry = planned_local(ArtifactKind::Instruction, "base.md");
+        let mut checked = check_single(&entry, tmp.path(), tmp.path()).unwrap();
+        checked.rendered = Some("generated\n".to_owned());
+        execute(&checked).unwrap();
+
+        let target = tmp.path().join("CLAUDE.md");
+        assert!(
+            target.symlink_metadata().unwrap().is_file(),
+            "the symlink must become a regular file"
+        );
+        assert_eq!(fs::read_to_string(&target).unwrap(), "generated\n");
+        assert_eq!(
+            fs::read_to_string(tmp.path().join("victim.md")).unwrap(),
+            "must survive\n"
+        );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn execute_replaces_a_symlinked_git_instruction_target_and_keeps_the_pointee() {
+        use std::os::unix::fs::symlink;
+        let tmp = tempfile::tempdir().unwrap();
+        let checkout = tmp.path().join("checkout");
+        fs::create_dir_all(&checkout).unwrap();
+        fs::write(checkout.join("base.md"), "# base\n").unwrap();
+        let project = tmp.path().join("project");
+        fs::create_dir_all(&project).unwrap();
+        fs::write(project.join("victim.md"), "must survive\n").unwrap();
+        symlink(project.join("victim.md"), project.join("CLAUDE.md")).unwrap();
+
+        let entry = planned(ArtifactKind::Instruction, "base.md");
+        let mut checked = check_single(&entry, &checkout, &project).unwrap();
+        checked.rendered = Some("generated\n".to_owned());
+        execute(&checked).unwrap();
+
+        let target = project.join("CLAUDE.md");
+        assert!(target.symlink_metadata().unwrap().is_file());
+        assert_eq!(fs::read_to_string(&target).unwrap(), "generated\n");
+        assert_eq!(
+            fs::read_to_string(project.join("victim.md")).unwrap(),
+            "must survive\n"
         );
     }
 
@@ -755,6 +892,7 @@ mod tests {
             source_abs: tmp.path().join("missing-skill"),
             target_abs: tmp.path().join("project/.claude/skills/demo"),
             kind: ArtifactKind::Skill,
+            rendered: None,
         };
         let diag = execute(&checked).unwrap_err();
         assert_eq!(diag.code, DiagnosticCode::Io);

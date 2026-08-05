@@ -92,13 +92,13 @@ fn plan_target(
     consumer: &TargetConsumer,
     planned: &mut Vec<PlannedMaterialization>,
 ) {
-    for name in &consumer.use_skills {
+    for usage in &consumer.use_skills {
         // Reference existence is validated at parse time, so a missing lookup here is a programming error.
         let decl = manifest
             .provider
             .skills
             .iter()
-            .find(|s| &s.name == name)
+            .find(|s| s.name == usage.name)
             .expect("validated manifest references a declared skill");
         planned.push(PlannedMaterialization {
             source_name: decl.name.clone(),

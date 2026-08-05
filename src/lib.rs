@@ -20,6 +20,7 @@ use diagnostics::{Diagnostic, DiagnosticCode};
 use gist::{GistRequest, GistResolver, GitTransportGistResolver};
 use git::{CommitSha, GitError, GitResolutionRequest, GitResolver, GitSelector, ResolvedSource};
 use manifest::{GistArtifactSelector, SourceReference, TargetAi};
+use plan::ArtifactKind;
 use plan::PlannedMaterialization;
 use provenance::{ProvenanceEntry, ProvenanceGitSelector, ProvenanceRecord, ProvenanceSource};
 
@@ -164,7 +165,17 @@ pub fn run_materialize(
             }
         };
         match materialize::check(entry, source_base, project_root, &target_rel_paths) {
-            Ok(c) => {
+            Ok(mut c) => {
+                // Instructions are rendered here, inside the check phase: the source read, UTF-8 decode, and composition all complete before the first target write, so a failing instruction leaves Skills, agents, and other targets untouched.
+                if entry.kind == ArtifactKind::Instruction {
+                    match render_instruction(entry, &c.source_abs, &manifest) {
+                        Ok(content) => c.rendered = Some(content),
+                        Err(d) => {
+                            diags.push(d);
+                            continue;
+                        }
+                    }
+                }
                 let origin = match &entry.reference {
                     SourceReference::Git { url, selector, .. } => ResolvedOrigin::Git {
                         revision: resolved[&(url.clone(), selector.clone())].commit.clone(),
@@ -231,6 +242,46 @@ pub fn run_materialize(
         entries: results,
         lock: lock_outcome,
         lock_path,
+    })
+}
+
+/// Reads and renders one instruction entry's base document with its target's Skill usage rules.
+///
+/// The failure wording names the artifact kind and the provider-side source identity (`instruction `claude``), matching how every other artifact reports.
+fn render_instruction(
+    entry: &PlannedMaterialization,
+    source_abs: &Path,
+    manifest: &manifest::Manifest,
+) -> Result<String, Diagnostic> {
+    let bytes = std::fs::read(source_abs).map_err(|e| {
+        Diagnostic::new(
+            DiagnosticCode::Io,
+            format!(
+                "{} `{}`: failed to read base document: {e}",
+                entry.kind.as_str(),
+                entry.source_name
+            ),
+        )
+    })?;
+
+    // The entry exists only because this target's consumer is declared (see plan_target), so the lookup cannot miss.
+    let usages = match entry.target_ai {
+        TargetAi::Claude => &manifest.consumer.claude,
+        TargetAi::Codex => &manifest.consumer.codex,
+    }
+    .as_ref()
+    .map(|c| c.use_skills.as_slice())
+    .expect("an instruction is planned only for a declared consumer target");
+
+    instruction::render(&bytes, usages).map_err(|e| match e {
+        instruction::RenderError::InvalidUtf8 { valid_up_to } => Diagnostic::new(
+            DiagnosticCode::ArtifactShape,
+            format!(
+                "{} `{}`: base document is not valid UTF-8 (valid up to byte {valid_up_to})",
+                entry.kind.as_str(),
+                entry.source_name
+            ),
+        ),
     })
 }
 

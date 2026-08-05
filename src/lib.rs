@@ -6,6 +6,7 @@ pub mod diagnostics;
 pub mod gist;
 pub mod git;
 pub mod init;
+pub mod instruction;
 pub mod lock;
 pub mod manifest;
 pub mod materialize;

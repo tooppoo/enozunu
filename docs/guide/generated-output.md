@@ -45,7 +45,7 @@ not as Enozunu-generated output.
 
 ## Root Instruction Files
 
-When the manifest declares `provider.instructions.<target>`, summon generates the corresponding root instruction file — `CLAUDE.md` for Claude, `AGENTS.md` for Codex — as described in [the manifest format guide](manifest.md#root-instructions).
+When the manifest declares `provider.instructions.<target>` and the target's `consumer` block, summon generates the corresponding root instruction file — `CLAUDE.md` for Claude, `AGENTS.md` for Codex — as described in [the manifest format guide](manifest.md#root-instructions).
 
 These files follow the opposite Git convention from the generated directories: commit them.
 Target AIs — including remote agents — read the root instruction files before `enozunu summon` can run, so the committed file is the one that matters at agent startup.
@@ -54,10 +54,11 @@ CI can verify that the committed files, the manifest, the lock, and the base doc
 
 ```sh
 enozunu summon --frozen
-git diff --exit-code
+test -z "$(git status --porcelain)"
 ```
 
-An empty diff after a frozen summon means the committed instruction files are exactly what the declared sources generate.
+A clean status after a frozen summon means the committed instruction files have not drifted from what the declared sources generate, and no generated file is left uncommitted.
+A plain `git diff --exit-code` is not enough for the adoption case, because it ignores a generated file that was never committed.
 
 Ownership and safety rules:
 

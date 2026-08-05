@@ -97,3 +97,191 @@ case "summon reports a gist revision that does not exist" {
     }
   }
 }
+
+# The three cases below pin the CLI-visible diagnostics for a gist `file`
+# selection that resolves badly. Beyond the diagnostic code, each asserts the
+# message prefix naming the artifact kind: the file-shaped checks are shared
+# across kinds (issue #38), so a failure must be reported as the entry's actual
+# kind rather than a hard-coded `agent`.
+#
+# The workspace path and the pinned revision are captured as case-local
+# bindings and substituted into interpolated `write` literals, so the
+# gitconfig and the manifest are written declaratively rather than assembled
+# with shell redirection and sed.
+
+case "summon reports a gist file missing from the pinned revision" {
+  $ git init --quiet --initial-branch main gist-repo
+  $ git -C gist-repo config user.email "e2e@example.com"
+  $ git -C gist-repo config user.name "e2e"
+  $ printf '# shell reviewer\n' > gist-repo/agent.md
+  $ git -C gist-repo add agent.md
+  $ git -C gist-repo commit --quiet -m only
+  $ pwd
+  let workspace <- stdout_line
+  $ git -C gist-repo rev-parse HEAD
+  let rev <- stdout_line
+  write <"fake-gitconfig"> &```
+    [url "file://&{workspace}/gist-repo"]
+      insteadOf = https://gist.github.com/2decf6c462d9b4418f2.git
+    ```
+  write <"enozunu.kdl"> &```
+    enozunu config-version=1 {
+      provider {
+        agents {
+          agent "gist-reviewer" {
+            gist {
+              id "2decf6c462d9b4418f2"
+              revision "&{rev}"
+              file "missing.md"
+            }
+          }
+        }
+      }
+      consumer {
+        claude {
+          use-agents "gist-reviewer"
+        }
+      }
+    }
+    ```
+  # Setup sanity: the fake gist repository and the interpolated writes are in
+  # place, and no target exists yet, so the post-summon assertions start from a
+  # verified state.
+  assert {
+    file <"gist-repo/agent.md"> exists
+    file <"fake-gitconfig"> contains &"[url \"file://&{workspace}/gist-repo\"]"
+    file <"enozunu.kdl"> contains &"revision \"&{rev}\""
+    not {
+      dir <".claude"> exists
+    }
+  }
+  $ GIT_CONFIG_GLOBAL="$PWD/fake-gitconfig" GIT_CONFIG_NOSYSTEM=1 enozunu summon
+  assert {
+    exit 1
+    stderr contains "error[source-path-not-found]: agent `gist-reviewer`: gist file `missing.md` does not exist in the resolved revision"
+    not {
+      dir <".claude"> exists
+    }
+  }
+}
+
+case "summon reports a gist file that is a directory" {
+  $ git init --quiet --initial-branch main gist-repo
+  $ git -C gist-repo config user.email "e2e@example.com"
+  $ git -C gist-repo config user.name "e2e"
+  # Git tracks only files, so the directory-shaped `dir.md` is committed through
+  # a file inside it.
+  $ mkdir -p gist-repo/dir.md
+  $ printf 'inner\n' > gist-repo/dir.md/inner.txt
+  $ git -C gist-repo add dir.md
+  $ git -C gist-repo commit --quiet -m dir
+  $ pwd
+  let workspace <- stdout_line
+  $ git -C gist-repo rev-parse HEAD
+  let rev <- stdout_line
+  write <"fake-gitconfig"> &```
+    [url "file://&{workspace}/gist-repo"]
+      insteadOf = https://gist.github.com/2decf6c462d9b4418f2.git
+    ```
+  write <"enozunu.kdl"> &```
+    enozunu config-version=1 {
+      provider {
+        agents {
+          agent "gist-reviewer" {
+            gist {
+              id "2decf6c462d9b4418f2"
+              revision "&{rev}"
+              file "dir.md"
+            }
+          }
+        }
+      }
+      consumer {
+        claude {
+          use-agents "gist-reviewer"
+        }
+      }
+    }
+    ```
+  # Setup sanity: the directory-shaped `dir.md` and the interpolated writes are
+  # in place, and no target exists yet, so the post-summon assertions start
+  # from a verified state.
+  assert {
+    dir <"gist-repo/dir.md"> exists
+    file <"gist-repo/dir.md/inner.txt"> exists
+    file <"fake-gitconfig"> contains &"[url \"file://&{workspace}/gist-repo\"]"
+    file <"enozunu.kdl"> contains &"revision \"&{rev}\""
+    not {
+      dir <".claude"> exists
+    }
+  }
+  $ GIT_CONFIG_GLOBAL="$PWD/fake-gitconfig" GIT_CONFIG_NOSYSTEM=1 enozunu summon
+  assert {
+    exit 1
+    stderr contains "error[artifact-shape]: agent `gist-reviewer`: gist file `dir.md` is not a regular file"
+    not {
+      dir <".claude"> exists
+    }
+  }
+}
+
+case "summon reports a gist file escaping the resolved revision" {
+  $ git init --quiet --initial-branch main gist-repo
+  $ git -C gist-repo config user.email "e2e@example.com"
+  $ git -C gist-repo config user.name "e2e"
+  # A committed symlink whose target lies outside the exported content: the
+  # workspace-absolute target exists during the run, so path canonicalization
+  # succeeds and the containment check is what rejects it.
+  $ printf 'outside\n' > outside.txt
+  $ ln -s "$PWD/outside.txt" gist-repo/escape.md
+  $ git -C gist-repo add escape.md
+  $ git -C gist-repo commit --quiet -m escape
+  $ pwd
+  let workspace <- stdout_line
+  $ git -C gist-repo rev-parse HEAD
+  let rev <- stdout_line
+  write <"fake-gitconfig"> &```
+    [url "file://&{workspace}/gist-repo"]
+      insteadOf = https://gist.github.com/2decf6c462d9b4418f2.git
+    ```
+  write <"enozunu.kdl"> &```
+    enozunu config-version=1 {
+      provider {
+        agents {
+          agent "gist-reviewer" {
+            gist {
+              id "2decf6c462d9b4418f2"
+              revision "&{rev}"
+              file "escape.md"
+            }
+          }
+        }
+      }
+      consumer {
+        claude {
+          use-agents "gist-reviewer"
+        }
+      }
+    }
+    ```
+  # Setup sanity: the escape target and the symlink (whose resolution through
+  # to the regular file proves it points where intended) and the interpolated
+  # writes are in place, and no target exists yet.
+  assert {
+    file <"outside.txt"> exists
+    file <"gist-repo/escape.md"> exists
+    file <"fake-gitconfig"> contains &"[url \"file://&{workspace}/gist-repo\"]"
+    file <"enozunu.kdl"> contains &"revision \"&{rev}\""
+    not {
+      dir <".claude"> exists
+    }
+  }
+  $ GIT_CONFIG_GLOBAL="$PWD/fake-gitconfig" GIT_CONFIG_NOSYSTEM=1 enozunu summon
+  assert {
+    exit 1
+    stderr contains "error[unsafe-path]: agent `gist-reviewer`: gist file `escape.md` escapes the resolved revision"
+    not {
+      dir <".claude"> exists
+    }
+  }
+}

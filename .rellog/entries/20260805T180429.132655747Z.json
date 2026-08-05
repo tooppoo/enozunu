@@ -1,0 +1,8 @@
+{
+  "kind": "added",
+  "targets": [
+    "cli"
+  ],
+  "links": [],
+  "body": "support root instructions management.\nenozunu build AGENTS.md and CLAUDE.md following to enozunu.kdl"
+}

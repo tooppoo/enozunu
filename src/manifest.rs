@@ -106,12 +106,22 @@ impl TargetAi {
     }
 }
 
+/// One Skill selection of a target consumer, normalized from the `use-skills` surface forms.
+///
+/// Both the blockless form (`use-skills "a" "b"`) and the block form with `when` annotations planned by issue #38 normalize to one `SkillUsage` per Skill name, so downstream planning and rendering never branch on which surface syntax selected the Skill.
+/// `whens` is empty for a blockless selection; the block form is not parsed yet, so today every parsed usage has empty `whens`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct SkillUsage {
+    pub name: String,
+    pub whens: Vec<String>,
+}
+
 /// The sources one target AI selects from the shared provider pool.
 ///
 /// The type is target-independent: Claude and Codex select from the same `provider.skills` and `provider.agents`, and the target only changes where each selection materializes.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct TargetConsumer {
-    pub use_skills: Vec<String>,
+    pub use_skills: Vec<SkillUsage>,
     pub use_agents: Vec<String>,
 }
 
@@ -820,7 +830,14 @@ fn parse_target_consumer(
                 // A `use-skills` / `use-agents` node declares selections; it is not a value later nodes override.
                 // Nodes concatenate in declaration order, so the grouped form (`use-skills "a" "b"`) and the split form (`use-skills "a"` + `use-skills "b"`) parse identically and node boundaries carry no meaning after parse.
                 // A name repeated across nodes therefore collides on its target path at plan time, the same as repeating it inside one node.
-                "use-skills" => use_skills.extend(string_args(child, "use-skills", diags)),
+                "use-skills" => {
+                    use_skills.extend(string_args(child, "use-skills", diags).into_iter().map(
+                        |name| SkillUsage {
+                            name,
+                            whens: Vec::new(),
+                        },
+                    ))
+                }
                 "use-agents" => use_agents.extend(string_args(child, "use-agents", diags)),
                 other => diags.push(Diagnostic::new(
                     DiagnosticCode::ManifestShape,
@@ -840,7 +857,8 @@ fn validate_references(manifest: &Manifest, diags: &mut Vec<Diagnostic>) {
     // Every target selects from the same provider pool, so each target's references are checked against the same `provider.skills` / `provider.agents`.
     for (ai, consumer) in manifest.consumer.targets() {
         let target = ai.as_str();
-        for name in &consumer.use_skills {
+        for usage in &consumer.use_skills {
+            let name = &usage.name;
             if !manifest.provider.skills.iter().any(|s| &s.name == name) {
                 diags.push(Diagnostic::new(
                     DiagnosticCode::UnknownSourceReference,
@@ -1010,6 +1028,15 @@ enozunu config-version=1 {
         result.unwrap_err().into_iter().map(|d| d.code).collect()
     }
 
+    /// Projects a consumer's Skill selections back to their names, so assertions about selection order stay readable.
+    fn skill_names(consumer: &TargetConsumer) -> Vec<&str> {
+        consumer
+            .use_skills
+            .iter()
+            .map(|u| u.name.as_str())
+            .collect()
+    }
+
     fn messages(result: Result<Manifest, Vec<Diagnostic>>) -> Vec<String> {
         result.unwrap_err().into_iter().map(|d| d.message).collect()
     }
@@ -1020,7 +1047,7 @@ enozunu config-version=1 {
         assert_eq!(manifest.provider.skills.len(), 2);
         assert_eq!(manifest.provider.agents.len(), 1);
         assert_eq!(
-            manifest.consumer.claude.as_ref().unwrap().use_skills,
+            skill_names(manifest.consumer.claude.as_ref().unwrap()),
             ["git-kura", "local-git-kura"]
         );
         assert_eq!(
@@ -1083,7 +1110,7 @@ enozunu config-version=1 {
         let manifest = parse(text).unwrap();
         assert!(manifest.consumer.claude.is_none());
         let codex = manifest.consumer.codex.as_ref().unwrap();
-        assert_eq!(codex.use_skills, ["git-kura"]);
+        assert_eq!(skill_names(codex), ["git-kura"]);
         assert_eq!(codex.use_agents, ["reviewer-codex"]);
     }
 
@@ -1108,11 +1135,11 @@ enozunu config-version=1 {
 "#;
         let manifest = parse(text).unwrap();
         assert_eq!(
-            manifest.consumer.claude.as_ref().unwrap().use_skills,
+            skill_names(manifest.consumer.claude.as_ref().unwrap()),
             ["git-kura"]
         );
         assert_eq!(
-            manifest.consumer.codex.as_ref().unwrap().use_skills,
+            skill_names(manifest.consumer.codex.as_ref().unwrap()),
             ["git-kura"]
         );
     }
@@ -1151,10 +1178,19 @@ enozunu config-version=1 {{
         ))
         .unwrap();
         assert_eq!(
-            grouped.consumer.claude.as_ref().unwrap().use_skills,
+            skill_names(grouped.consumer.claude.as_ref().unwrap()),
             ["a", "b"]
         );
         assert_eq!(grouped, split);
+    }
+
+    #[test]
+    fn normalizes_blockless_selections_to_skill_usages_without_whens() {
+        // The blockless form carries no usage annotations, so each name normalizes to a `SkillUsage` with empty `whens`.
+        let manifest = parse(&consumer_claude(r#"      use-skills "a" "b""#)).unwrap();
+        let claude = manifest.consumer.claude.as_ref().unwrap();
+        assert_eq!(claude.use_skills.len(), 2);
+        assert!(claude.use_skills.iter().all(|u| u.whens.is_empty()));
     }
 
     #[test]
@@ -1182,7 +1218,7 @@ enozunu config-version=1 {{
         ))
         .unwrap();
         let claude = manifest.consumer.claude.as_ref().unwrap();
-        assert_eq!(claude.use_skills, ["b", "a"]);
+        assert_eq!(skill_names(claude), ["b", "a"]);
         assert_eq!(claude.use_agents, ["y", "x"]);
     }
 

@@ -1,7 +1,8 @@
 //! Executes materialization plans against the project filesystem.
 //!
 //! This module owns artifact-shape checks and filesystem safety.
-//! It never writes outside the project root and rejects symlinked sources instead of following them.
+//! It rejects symlinked sources instead of following them.
+//! A symlink at the final target component is replaced itself, never followed, so a summon cannot destroy the object the symlink points to; symlinked target ancestors are traversed like ordinary directories, so the physical write location can lie outside the project root.
 
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -302,10 +303,9 @@ fn check_local_source(
             format!("failed to resolve project root: {e}"),
         )
     })?;
-    let mut own_target_abs = None;
     for target_rel_path in planned_target_rel_paths {
-        let target_abs = canonicalize_target(&project_canon.join(target_rel_path))?;
-        if source_canon.starts_with(&target_abs) || target_abs.starts_with(&source_canon) {
+        let overlap_target = overlap_check_target(&project_canon.join(target_rel_path))?;
+        if source_canon.starts_with(&overlap_target) || overlap_target.starts_with(&source_canon) {
             return Err(Diagnostic::new(
                 DiagnosticCode::UnsafePath,
                 format!(
@@ -317,19 +317,9 @@ fn check_local_source(
                 ),
             ));
         }
-        if target_rel_path == &entry.target_rel_path {
-            own_target_abs = Some(target_abs);
-        }
     }
-    // The root instruction contract replaces a symlink at the target itself (see the root repository instructions ADR); the canonicalized form above is what overlap checking needs, but writing through it would overwrite the symlink's destination — possibly outside the project root — instead of the symlink.
-    let target_abs = if entry.kind == ArtifactKind::Instruction {
-        project_canon.join(&entry.target_rel_path)
-    } else {
-        match own_target_abs {
-            Some(target) => target,
-            None => canonicalize_target(&project_canon.join(&entry.target_rel_path))?,
-        }
-    };
+    // Execution replaces a symlink at the final target component itself (see the replace-semantics ADR), so the write target is the declared path, never its canonical form: writing through the canonical form would overwrite the symlink's destination — possibly outside the project root — instead of the symlink.
+    let target_abs = project_canon.join(&entry.target_rel_path);
 
     check_artifact_shape(entry, &source_canon, source_path)?;
 
@@ -339,6 +329,24 @@ fn check_local_source(
         kind: entry.kind,
         rendered: None,
     })
+}
+
+/// Resolves a target path for overlap comparison so the comparison matches execution's delete-and-write semantics.
+///
+/// Symlinked ancestors are resolved because execution traverses them to the physical write location; a symlink at the final component is kept as its own path because execution replaces the symlink, not its destination, so only the symlink itself can collide with a source.
+fn overlap_check_target(path: &Path) -> Result<PathBuf, Diagnostic> {
+    if path.symlink_metadata().is_ok_and(|m| m.is_symlink()) {
+        let (Some(parent), Some(name)) = (path.parent(), path.file_name()) else {
+            return Err(Diagnostic::new(
+                DiagnosticCode::Io,
+                format!("failed to resolve target path {}", path.display()),
+            ));
+        };
+        let mut resolved = canonicalize_target(parent)?;
+        resolved.push(name);
+        return Ok(resolved);
+    }
+    canonicalize_target(path)
 }
 
 /// Canonicalizes a target path whose tail may not exist yet, by canonicalizing the deepest existing ancestor and re-appending the remaining components.
@@ -839,6 +847,155 @@ mod tests {
 
         assert_eq!(diag.code, DiagnosticCode::UnsafePath);
         assert!(shared.join("demo/SKILL.md").is_file());
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn execute_replaces_a_symlinked_local_agent_target_and_keeps_the_pointee() {
+        use std::os::unix::fs::symlink;
+        let tmp = tempfile::tempdir().unwrap();
+        let project = tmp.path().join("project");
+        fs::create_dir_all(project.join(".claude/agents")).unwrap();
+        fs::write(project.join("agent-src.md"), "generated agent\n").unwrap();
+        let pointee = tmp.path().join("shared-agent.md");
+        fs::write(&pointee, "must survive\n").unwrap();
+        // A symlinked agent target must be replaced itself, never followed to its destination.
+        symlink(&pointee, project.join(".claude/agents/demo.md")).unwrap();
+
+        let entry = planned_local(ArtifactKind::Agent, "agent-src.md");
+        let checked = check_single(&entry, &project, &project).unwrap();
+        execute(&checked).unwrap();
+
+        let target = project.join(".claude/agents/demo.md");
+        assert!(
+            target.symlink_metadata().unwrap().is_file(),
+            "the symlink must become a regular file"
+        );
+        assert_eq!(fs::read_to_string(&target).unwrap(), "generated agent\n");
+        assert_eq!(fs::read_to_string(&pointee).unwrap(), "must survive\n");
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn execute_replaces_a_broken_symlinked_local_agent_target() {
+        use std::os::unix::fs::symlink;
+        let tmp = tempfile::tempdir().unwrap();
+        let project = tmp.path().join("project");
+        fs::create_dir_all(project.join(".claude/agents")).unwrap();
+        fs::write(project.join("agent-src.md"), "generated agent\n").unwrap();
+        symlink(
+            tmp.path().join("does-not-exist"),
+            project.join(".claude/agents/demo.md"),
+        )
+        .unwrap();
+
+        let entry = planned_local(ArtifactKind::Agent, "agent-src.md");
+        let checked = check_single(&entry, &project, &project).unwrap();
+        execute(&checked).unwrap();
+
+        let target = project.join(".claude/agents/demo.md");
+        assert!(target.symlink_metadata().unwrap().is_file());
+        assert_eq!(fs::read_to_string(&target).unwrap(), "generated agent\n");
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn execute_replaces_a_symlinked_local_skill_target_and_keeps_the_pointee_tree() {
+        use std::os::unix::fs::symlink;
+        let tmp = tempfile::tempdir().unwrap();
+        let project = tmp.path().join("project");
+        fs::create_dir_all(project.join(".claude/skills")).unwrap();
+        let source = tmp.path().join("source-skill");
+        fs::create_dir_all(&source).unwrap();
+        fs::write(source.join("SKILL.md"), "# demo\n").unwrap();
+        // The pointee holds files unrelated to the source; following the symlink would recursively delete them.
+        let pointee = tmp.path().join("shared/demo");
+        fs::create_dir_all(&pointee).unwrap();
+        fs::write(pointee.join("SKILL.md"), "# shared\n").unwrap();
+        fs::write(pointee.join("unrelated.txt"), "keep\n").unwrap();
+        symlink(&pointee, project.join(".claude/skills/demo")).unwrap();
+
+        let entry = planned_local(ArtifactKind::Skill, "../source-skill");
+        let checked = check_single(&entry, &project, &project).unwrap();
+        execute(&checked).unwrap();
+
+        let target = project.join(".claude/skills/demo");
+        let target_meta = target.symlink_metadata().unwrap();
+        assert!(
+            target_meta.is_dir() && !target_meta.is_symlink(),
+            "the symlink must become a real directory"
+        );
+        assert_eq!(
+            fs::read_to_string(target.join("SKILL.md")).unwrap(),
+            "# demo\n"
+        );
+        assert_eq!(
+            fs::read_to_string(pointee.join("SKILL.md")).unwrap(),
+            "# shared\n"
+        );
+        assert_eq!(
+            fs::read_to_string(pointee.join("unrelated.txt")).unwrap(),
+            "keep\n"
+        );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn execute_replaces_a_broken_symlinked_local_skill_target() {
+        use std::os::unix::fs::symlink;
+        let tmp = tempfile::tempdir().unwrap();
+        let project = tmp.path().join("project");
+        fs::create_dir_all(project.join(".claude/skills")).unwrap();
+        let source = tmp.path().join("source-skill");
+        fs::create_dir_all(&source).unwrap();
+        fs::write(source.join("SKILL.md"), "# demo\n").unwrap();
+        symlink(
+            tmp.path().join("does-not-exist"),
+            project.join(".claude/skills/demo"),
+        )
+        .unwrap();
+
+        let entry = planned_local(ArtifactKind::Skill, "../source-skill");
+        let checked = check_single(&entry, &project, &project).unwrap();
+        execute(&checked).unwrap();
+
+        let target = project.join(".claude/skills/demo");
+        let target_meta = target.symlink_metadata().unwrap();
+        assert!(target_meta.is_dir() && !target_meta.is_symlink());
+        assert_eq!(
+            fs::read_to_string(target.join("SKILL.md")).unwrap(),
+            "# demo\n"
+        );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn check_allows_a_local_source_that_is_only_the_final_target_symlinks_pointee() {
+        use std::os::unix::fs::symlink;
+        let tmp = tempfile::tempdir().unwrap();
+        let project = tmp.path().join("project");
+        fs::create_dir_all(project.join(".claude/skills")).unwrap();
+        let source = tmp.path().join("shared/demo");
+        fs::create_dir_all(&source).unwrap();
+        fs::write(source.join("SKILL.md"), "# demo\n").unwrap();
+        // The target symlink points at the source, but execution replaces the symlink itself, so the source is never the write destination.
+        symlink(&source, project.join(".claude/skills/demo")).unwrap();
+
+        let entry = planned_local(ArtifactKind::Skill, "../shared/demo");
+        let checked = check_single(&entry, &project, &project).unwrap();
+        execute(&checked).unwrap();
+
+        let target = project.join(".claude/skills/demo");
+        let target_meta = target.symlink_metadata().unwrap();
+        assert!(target_meta.is_dir() && !target_meta.is_symlink());
+        assert_eq!(
+            fs::read_to_string(target.join("SKILL.md")).unwrap(),
+            "# demo\n"
+        );
+        assert!(
+            source.join("SKILL.md").is_file(),
+            "the source must survive materialization"
+        );
     }
 
     #[test]

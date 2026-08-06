@@ -509,8 +509,8 @@ fn io_diag(e: std::io::Error) -> Diagnostic {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::git::GitSelector;
-    use crate::manifest::{SourceReference, TargetAi};
+    use crate::git::{CommitSha, GitSelector};
+    use crate::manifest::{GistId, SourceReference, TargetAi};
 
     fn target_rel_path(kind: ArtifactKind) -> String {
         match kind {
@@ -540,6 +540,20 @@ mod tests {
             kind,
             reference: SourceReference::Local {
                 path: path.to_owned(),
+            },
+            target_ai: TargetAi::Claude,
+            target_rel_path: target_rel_path(kind),
+        }
+    }
+
+    fn planned_gist(kind: ArtifactKind, selector: GistArtifactSelector) -> PlannedMaterialization {
+        PlannedMaterialization {
+            source_name: "demo".to_owned(),
+            kind,
+            reference: SourceReference::Gist {
+                id: GistId::parse("aa5a315d61ae9438b18d").unwrap(),
+                revision: CommitSha::parse("468aac8caed5f0c3b859b8286968e2c78e2b8760").unwrap(),
+                selector,
             },
             target_ai: TargetAi::Claude,
             target_rel_path: target_rel_path(kind),
@@ -995,6 +1009,183 @@ mod tests {
         assert!(
             source.join("SKILL.md").is_file(),
             "the source must survive materialization"
+        );
+    }
+
+    // The final-symlink replace contract must not depend on the source kind: the tests below pin the same behavior already pinned for local sources onto Git and Gist sources, for every artifact kind.
+
+    #[test]
+    #[cfg(unix)]
+    fn execute_replaces_a_symlinked_git_agent_target_and_keeps_the_pointee() {
+        use std::os::unix::fs::symlink;
+        let tmp = tempfile::tempdir().unwrap();
+        let checkout = tmp.path().join("checkout");
+        fs::create_dir_all(&checkout).unwrap();
+        fs::write(checkout.join("demo.md"), "generated agent\n").unwrap();
+        let project = tmp.path().join("project");
+        fs::create_dir_all(project.join(".claude/agents")).unwrap();
+        let pointee = tmp.path().join("shared-agent.md");
+        fs::write(&pointee, "must survive\n").unwrap();
+        symlink(&pointee, project.join(".claude/agents/demo.md")).unwrap();
+
+        let entry = planned(ArtifactKind::Agent, "demo.md");
+        let checked = check_single(&entry, &checkout, &project).unwrap();
+        execute(&checked).unwrap();
+
+        let target = project.join(".claude/agents/demo.md");
+        assert!(
+            target.symlink_metadata().unwrap().is_file(),
+            "the symlink must become a regular file"
+        );
+        assert_eq!(fs::read_to_string(&target).unwrap(), "generated agent\n");
+        assert_eq!(fs::read_to_string(&pointee).unwrap(), "must survive\n");
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn execute_replaces_a_symlinked_git_skill_target_and_keeps_the_pointee_tree() {
+        use std::os::unix::fs::symlink;
+        let tmp = tempfile::tempdir().unwrap();
+        let checkout = tmp.path().join("checkout");
+        fs::create_dir_all(checkout.join("skills/demo")).unwrap();
+        fs::write(checkout.join("skills/demo/SKILL.md"), "# demo\n").unwrap();
+        let project = tmp.path().join("project");
+        fs::create_dir_all(project.join(".claude/skills")).unwrap();
+        let pointee = tmp.path().join("shared/demo");
+        fs::create_dir_all(&pointee).unwrap();
+        fs::write(pointee.join("SKILL.md"), "# shared\n").unwrap();
+        fs::write(pointee.join("unrelated.txt"), "keep\n").unwrap();
+        symlink(&pointee, project.join(".claude/skills/demo")).unwrap();
+
+        let entry = planned(ArtifactKind::Skill, "skills/demo");
+        let checked = check_single(&entry, &checkout, &project).unwrap();
+        execute(&checked).unwrap();
+
+        let target = project.join(".claude/skills/demo");
+        let target_meta = target.symlink_metadata().unwrap();
+        assert!(
+            target_meta.is_dir() && !target_meta.is_symlink(),
+            "the symlink must become a real directory"
+        );
+        assert_eq!(
+            fs::read_to_string(target.join("SKILL.md")).unwrap(),
+            "# demo\n"
+        );
+        assert_eq!(
+            fs::read_to_string(pointee.join("SKILL.md")).unwrap(),
+            "# shared\n"
+        );
+        assert_eq!(
+            fs::read_to_string(pointee.join("unrelated.txt")).unwrap(),
+            "keep\n"
+        );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn execute_replaces_a_symlinked_gist_agent_target_and_keeps_the_pointee() {
+        use std::os::unix::fs::symlink;
+        let tmp = tempfile::tempdir().unwrap();
+        let content_root = tmp.path().join("gist");
+        fs::create_dir_all(&content_root).unwrap();
+        fs::write(content_root.join("demo.md"), "generated agent\n").unwrap();
+        let project = tmp.path().join("project");
+        fs::create_dir_all(project.join(".claude/agents")).unwrap();
+        let pointee = tmp.path().join("shared-agent.md");
+        fs::write(&pointee, "must survive\n").unwrap();
+        symlink(&pointee, project.join(".claude/agents/demo.md")).unwrap();
+
+        let entry = planned_gist(
+            ArtifactKind::Agent,
+            GistArtifactSelector::File {
+                path: "demo.md".to_owned(),
+            },
+        );
+        let checked = check_single(&entry, &content_root, &project).unwrap();
+        execute(&checked).unwrap();
+
+        let target = project.join(".claude/agents/demo.md");
+        assert!(
+            target.symlink_metadata().unwrap().is_file(),
+            "the symlink must become a regular file"
+        );
+        assert_eq!(fs::read_to_string(&target).unwrap(), "generated agent\n");
+        assert_eq!(fs::read_to_string(&pointee).unwrap(), "must survive\n");
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn execute_replaces_a_symlinked_gist_skill_target_and_keeps_the_pointee_tree() {
+        use std::os::unix::fs::symlink;
+        let tmp = tempfile::tempdir().unwrap();
+        // The exported revision root itself is the Skill artifact for a Gist source.
+        let content_root = tmp.path().join("gist");
+        fs::create_dir_all(&content_root).unwrap();
+        fs::write(content_root.join("SKILL.md"), "# demo\n").unwrap();
+        let project = tmp.path().join("project");
+        fs::create_dir_all(project.join(".claude/skills")).unwrap();
+        let pointee = tmp.path().join("shared/demo");
+        fs::create_dir_all(&pointee).unwrap();
+        fs::write(pointee.join("SKILL.md"), "# shared\n").unwrap();
+        fs::write(pointee.join("unrelated.txt"), "keep\n").unwrap();
+        symlink(&pointee, project.join(".claude/skills/demo")).unwrap();
+
+        let entry = planned_gist(ArtifactKind::Skill, GistArtifactSelector::Root);
+        let checked = check_single(&entry, &content_root, &project).unwrap();
+        execute(&checked).unwrap();
+
+        let target = project.join(".claude/skills/demo");
+        let target_meta = target.symlink_metadata().unwrap();
+        assert!(
+            target_meta.is_dir() && !target_meta.is_symlink(),
+            "the symlink must become a real directory"
+        );
+        assert_eq!(
+            fs::read_to_string(target.join("SKILL.md")).unwrap(),
+            "# demo\n"
+        );
+        assert_eq!(
+            fs::read_to_string(pointee.join("SKILL.md")).unwrap(),
+            "# shared\n"
+        );
+        assert_eq!(
+            fs::read_to_string(pointee.join("unrelated.txt")).unwrap(),
+            "keep\n"
+        );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn execute_replaces_a_symlinked_gist_instruction_target_and_keeps_the_pointee() {
+        use std::os::unix::fs::symlink;
+        let tmp = tempfile::tempdir().unwrap();
+        let content_root = tmp.path().join("gist");
+        fs::create_dir_all(&content_root).unwrap();
+        fs::write(content_root.join("base.md"), "# base\n").unwrap();
+        let project = tmp.path().join("project");
+        fs::create_dir_all(&project).unwrap();
+        fs::write(project.join("victim.md"), "must survive\n").unwrap();
+        symlink(project.join("victim.md"), project.join("CLAUDE.md")).unwrap();
+
+        let entry = planned_gist(
+            ArtifactKind::Instruction,
+            GistArtifactSelector::File {
+                path: "base.md".to_owned(),
+            },
+        );
+        let mut checked = check_single(&entry, &content_root, &project).unwrap();
+        checked.rendered = Some("generated\n".to_owned());
+        execute(&checked).unwrap();
+
+        let target = project.join("CLAUDE.md");
+        assert!(
+            target.symlink_metadata().unwrap().is_file(),
+            "the symlink must become a regular file"
+        );
+        assert_eq!(fs::read_to_string(&target).unwrap(), "generated\n");
+        assert_eq!(
+            fs::read_to_string(project.join("victim.md")).unwrap(),
+            "must survive\n"
         );
     }
 

@@ -1240,7 +1240,9 @@ fn parse_use_skills_alias(
     if node.children().is_some() {
         diags.push(Diagnostic::new(
             DiagnosticCode::ManifestShape,
-            format!("`use-skills same-as` under `consumer.{target}` must not have `when` children"),
+            format!(
+                "`use-skills same-as` under `consumer.{target}` must not have a child block, including `when`"
+            ),
         ));
         ok = false;
     }
@@ -3091,7 +3093,7 @@ enozunu config-version=1 {
         assert!(
             messages
                 .iter()
-                .any(|m| m.contains("must not have `when` children")),
+                .any(|m| m.contains("must not have a child block")),
             "{messages:?}"
         );
     }

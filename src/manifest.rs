@@ -323,9 +323,11 @@ fn parse_same_as_ref(raw: &str) -> Option<SameAsRef> {
 ///
 /// A `same-as` alias resolves against sibling declarations only after every target is parsed, so parsing records the unresolved reference and resolution replaces it with the referenced declaration's own `SourceReference`.
 /// The alias never becomes its own source identity: only the reused source reference crosses into the resolved `InstructionsDecl`, so the aliasing target keeps its own provenance and target path.
+/// A declaration that failed to parse is kept as `Invalid` rather than dropped, so an alias to a malformed target does not misreport it as undeclared and repeats no error the failed declaration already produced.
 enum InstructionDeclParsed {
     Normal(SourceReference),
     Alias { referenced: TargetAi },
+    Invalid,
 }
 
 /// The parsed-but-unresolved `provider.instructions` block.
@@ -401,7 +403,8 @@ fn parse_instructions(node: &KdlNode, diags: &mut Vec<Diagnostic>) -> Instructio
                 parse_source_reference(child, "instruction", target, diags)
                     .map(InstructionDeclParsed::Normal)
             };
-            *parsed.slot(target_ai) = declaration;
+            // A parse failure records `Invalid` rather than absence, so the target still counts as declared for a later alias and duplicate check.
+            *parsed.slot(target_ai) = Some(declaration.unwrap_or(InstructionDeclParsed::Invalid));
         }
     }
 
@@ -508,8 +511,12 @@ fn resolve_instruction_slot(
 ) -> Option<SourceReference> {
     match parsed.get(ai)? {
         InstructionDeclParsed::Normal(reference) => Some(reference.clone()),
+        // A declaration that failed to parse already reported its own error; it resolves to no source without a second one.
+        InstructionDeclParsed::Invalid => None,
         InstructionDeclParsed::Alias { referenced } => match parsed.get(*referenced) {
             Some(InstructionDeclParsed::Normal(reference)) => Some(reference.clone()),
+            // The referent failed to parse, so its own error stands; the alias adds no misleading "not declared" report.
+            Some(InstructionDeclParsed::Invalid) => None,
             Some(InstructionDeclParsed::Alias { .. }) => {
                 diags.push(Diagnostic::new(
                     DiagnosticCode::ManifestShape,
@@ -2491,6 +2498,28 @@ enozunu config-version=1 {
         assert!(
             messages.iter().any(|m| m.contains("not declared")),
             "{messages:?}"
+        );
+    }
+
+    #[test]
+    fn a_same_as_instruction_alias_to_a_malformed_target_does_not_report_it_as_undeclared() {
+        // The referent is declared but has no source reference block, so its own error stands and the alias must not add a misleading "not declared" report.
+        let text = manifest_with_instructions(
+            r#"      claude {}
+      codex same-as="provider.instructions.claude""#,
+            "",
+        );
+        let messages = messages(parse(&text));
+        assert!(
+            messages
+                .iter()
+                .any(|m| m.contains("instruction `claude`")
+                    && m.contains("source reference block")),
+            "the malformed referent's own error must be reported: {messages:?}"
+        );
+        assert!(
+            messages.iter().all(|m| !m.contains("not declared")),
+            "an alias to a malformed target must not be reported as undeclared: {messages:?}"
         );
     }
 

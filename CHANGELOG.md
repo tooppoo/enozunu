@@ -1,5 +1,20 @@
 # CHANGELOG
 
+## 0.2.1
+
+### changed
+
+#### cli
+
+<!-- rellog:entry:start -->
+<!-- rellog:body:start -->
+summon replaces a symlink at the final target path component itself for skill and agent targets instead of writing through it; workflows that relied on a local summon updating the symlink's destination should symlink an ancestor directory instead
+<!-- rellog:body:end -->
+
+Refs:
+- https://github.com/tooppoo/enozunu/issues/49
+<!-- rellog:entry:end -->
+
 ## 0.2.0
 
 ### added

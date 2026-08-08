@@ -84,7 +84,15 @@ that target directory reflects the source directory after regeneration.
 
 If a supporting file is removed from the source, it is also removed from the target on the next regeneration. This avoids stale files remaining in generated output. The reasoning is recorded in [the replace-semantics ADR](../design/adr/20260708T104205Z_generated-output-replace-semantics.md).
 
-## Editing Generated Output by Hand
+## Symlinked Target Paths
+
+Replace semantics applies to the declared target path itself, and a symlink at that path is no exception:
+
+- A symlink at the final target path component — the `.claude/skills/<name>` directory or `.claude/agents/<name>.md` file itself — is replaced by the generated output, whether or not the symlink's destination exists. The destination is never followed, deleted, or overwritten.
+- A symlinked ancestor directory — a `.claude/` or `.claude/skills/` that points elsewhere — is traversed like any directory, so the generated output is written at the location the ancestor resolves to.
+- Because ancestor symlinks are followed, the physical write location can lie outside the project root. To make generated output land in a shared location, symlink an ancestor directory; a symlink at the final component is always replaced instead of followed.
+
+This contract is the same for every source kind (`git`, `local`, `gist`) and every artifact kind, including root instruction files.
 
 Enozunu does not preserve, detect, merge, or reconcile manual edits inside generated output. A hand edit inside a generated directory such as `.claude/`, `.agents/`, or `.codex/` is not source of truth, and it is lost on the next regeneration.
 

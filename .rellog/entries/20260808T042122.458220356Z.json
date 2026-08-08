@@ -1,0 +1,10 @@
+{
+  "kind": "changed",
+  "targets": [
+    "cli"
+  ],
+  "links": [
+    "https://github.com/tooppoo/enozunu/issues/49"
+  ],
+  "body": "summon replaces a symlink at the final target path component itself for skill and agent targets instead of writing through it; workflows that relied on a local summon updating the symlink's destination should symlink an ancestor directory instead"
+}

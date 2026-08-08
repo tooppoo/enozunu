@@ -298,11 +298,66 @@ fn parse_provider(node: &KdlNode, diags: &mut Vec<Diagnostic>) -> Provider {
     }
 }
 
-/// Parses `provider.instructions`: at most one base document source per target AI.
+/// A `same-as` reference to another manifest logical value.
+///
+/// Issue #53 admits only a fixed set of references, not a general manifest path expression, so any other string is a diagnostic at parse time and every reference resolves to one closed `(logical type, target AI)` pair.
+/// The logical type is carried so a reference can be rejected where it names the wrong type for its declaration site, such as an instruction alias pointing at a `use-skills` value.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum SameAsRef {
+    Instructions(TargetAi),
+    UseSkills(TargetAi),
+}
+
+/// Resolves a `same-as` reference string, returning `None` for any path outside the supported set.
+fn parse_same_as_ref(raw: &str) -> Option<SameAsRef> {
+    match raw {
+        "provider.instructions.claude" => Some(SameAsRef::Instructions(TargetAi::Claude)),
+        "provider.instructions.codex" => Some(SameAsRef::Instructions(TargetAi::Codex)),
+        "consumer.claude.use-skills" => Some(SameAsRef::UseSkills(TargetAi::Claude)),
+        "consumer.codex.use-skills" => Some(SameAsRef::UseSkills(TargetAi::Codex)),
+        _ => None,
+    }
+}
+
+/// One `provider.instructions.<target>` declaration before `same-as` alias resolution.
+///
+/// A `same-as` alias resolves against sibling declarations only after every target is parsed, so parsing records the unresolved reference and resolution replaces it with the referenced declaration's own `SourceReference`.
+/// The alias never becomes its own source identity: only the reused source reference crosses into the resolved `InstructionsDecl`, so the aliasing target keeps its own provenance and target path.
+/// A declaration that failed to parse is kept as `Invalid` rather than dropped, so an alias to a malformed target does not misreport it as undeclared and repeats no error the failed declaration already produced.
+enum InstructionDeclParsed {
+    Normal(SourceReference),
+    Alias { referenced: TargetAi },
+    Invalid,
+}
+
+/// The parsed-but-unresolved `provider.instructions` block.
+#[derive(Default)]
+struct InstructionsParsed {
+    claude: Option<InstructionDeclParsed>,
+    codex: Option<InstructionDeclParsed>,
+}
+
+impl InstructionsParsed {
+    fn slot(&mut self, ai: TargetAi) -> &mut Option<InstructionDeclParsed> {
+        match ai {
+            TargetAi::Claude => &mut self.claude,
+            TargetAi::Codex => &mut self.codex,
+        }
+    }
+
+    fn get(&self, ai: TargetAi) -> Option<&InstructionDeclParsed> {
+        match ai {
+            TargetAi::Claude => self.claude.as_ref(),
+            TargetAi::Codex => self.codex.as_ref(),
+        }
+    }
+}
+
+/// Parses `provider.instructions`: at most one base document source per target AI, declared directly or reused from another target with `same-as`.
 ///
 /// The child node name doubles as the source's diagnostic and provenance identity (`instruction `claude``), because an instruction declaration has no user-defined name.
 fn parse_instructions(node: &KdlNode, diags: &mut Vec<Diagnostic>) -> InstructionsDecl {
-    let mut decl = InstructionsDecl::default();
+    let mut parsed = InstructionsParsed::default();
 
     if first_string_arg(node).is_some() {
         diags.push(Diagnostic::new(
@@ -314,9 +369,9 @@ fn parse_instructions(node: &KdlNode, diags: &mut Vec<Diagnostic>) -> Instructio
     if let Some(children) = node.children() {
         for child in children.nodes() {
             let target = child.name().value();
-            let slot = match target {
-                "claude" => &mut decl.claude,
-                "codex" => &mut decl.codex,
+            let target_ai = match target {
+                "claude" => TargetAi::Claude,
+                "codex" => TargetAi::Codex,
                 other => {
                     diags.push(Diagnostic::new(
                         DiagnosticCode::UnsupportedConsumer,
@@ -334,18 +389,158 @@ fn parse_instructions(node: &KdlNode, diags: &mut Vec<Diagnostic>) -> Instructio
                 ));
                 continue;
             }
-            if slot.is_some() {
+            if parsed.get(target_ai).is_some() {
                 diags.push(Diagnostic::new(
                     DiagnosticCode::ManifestShape,
                     format!("`provider.instructions.{target}` is declared more than once"),
                 ));
                 continue;
             }
-            *slot = parse_source_reference(child, "instruction", target, diags);
+            // A `same-as` property marks the alias form; its absence keeps the normal one-source-reference-block declaration unchanged from issue #38.
+            let declaration = if child.get("same-as").is_some() {
+                parse_instruction_alias(child, target, target_ai, diags)
+            } else {
+                parse_source_reference(child, "instruction", target, diags)
+                    .map(InstructionDeclParsed::Normal)
+            };
+            // A parse failure records `Invalid` rather than absence, so the target still counts as declared for a later alias and duplicate check.
+            *parsed.slot(target_ai) = Some(declaration.unwrap_or(InstructionDeclParsed::Invalid));
         }
     }
 
-    decl
+    resolve_instructions(&parsed, diags)
+}
+
+/// Parses the `same-as` alias form of a `provider.instructions.<target>` declaration.
+///
+/// The alias form carries only the `same-as` property: no positional argument (rejected by the caller), no other property, and no children, so it cannot combine a normal source reference with an alias for one logical value.
+/// The reference must name another target's instruction declaration; a reference of a different logical type or to the declaring target itself is rejected here, while a reference to another alias is rejected later during resolution.
+fn parse_instruction_alias(
+    node: &KdlNode,
+    target: &str,
+    target_ai: TargetAi,
+    diags: &mut Vec<Diagnostic>,
+) -> Option<InstructionDeclParsed> {
+    let mut ok = true;
+
+    for entry in node.entries() {
+        if entry.name().is_some_and(|name| name.value() != "same-as") {
+            diags.push(Diagnostic::new(
+                DiagnosticCode::ManifestShape,
+                format!(
+                    "`provider.instructions.{target}` `same-as` declaration must not declare other properties"
+                ),
+            ));
+            ok = false;
+        }
+    }
+
+    if node.children().is_some() {
+        diags.push(Diagnostic::new(
+            DiagnosticCode::ManifestShape,
+            format!(
+                "`provider.instructions.{target}` `same-as` declaration must not have a source reference block"
+            ),
+        ));
+        ok = false;
+    }
+
+    let value = node
+        .get("same-as")
+        .expect("the caller checked that `same-as` is present");
+    let Some(raw) = value.as_string() else {
+        diags.push(Diagnostic::new(
+            DiagnosticCode::ManifestShape,
+            format!("`provider.instructions.{target}` `same-as` must have a string value"),
+        ));
+        return None;
+    };
+
+    let Some(reference) = parse_same_as_ref(raw) else {
+        diags.push(Diagnostic::new(
+            DiagnosticCode::ManifestShape,
+            format!(
+                "`provider.instructions.{target}` `same-as` reference `{raw}` is not a supported reference"
+            ),
+        ));
+        return None;
+    };
+
+    let SameAsRef::Instructions(referenced) = reference else {
+        diags.push(Diagnostic::new(
+            DiagnosticCode::ManifestShape,
+            format!(
+                "`provider.instructions.{target}` `same-as` must reference another `provider.instructions.<target>`, but `{raw}` is a different logical type"
+            ),
+        ));
+        return None;
+    };
+
+    if referenced == target_ai {
+        diags.push(Diagnostic::new(
+            DiagnosticCode::ManifestShape,
+            format!("`provider.instructions.{target}` `same-as` must not reference itself"),
+        ));
+        return None;
+    }
+
+    if !ok {
+        return None;
+    }
+
+    Some(InstructionDeclParsed::Alias { referenced })
+}
+
+/// Resolves parsed instruction declarations into the domain `InstructionsDecl`.
+///
+/// A normal declaration keeps its own source. An alias reuses the referenced target's source reference, which must be a normal declaration: a reference to an undeclared target or to another alias is rejected, because issue #53 supports no alias chains.
+fn resolve_instructions(
+    parsed: &InstructionsParsed,
+    diags: &mut Vec<Diagnostic>,
+) -> InstructionsDecl {
+    InstructionsDecl {
+        claude: resolve_instruction_slot(TargetAi::Claude, parsed, diags),
+        codex: resolve_instruction_slot(TargetAi::Codex, parsed, diags),
+    }
+}
+
+fn resolve_instruction_slot(
+    ai: TargetAi,
+    parsed: &InstructionsParsed,
+    diags: &mut Vec<Diagnostic>,
+) -> Option<SourceReference> {
+    match parsed.get(ai)? {
+        InstructionDeclParsed::Normal(reference) => Some(reference.clone()),
+        // A declaration that failed to parse already reported its own error; it resolves to no source without a second one.
+        InstructionDeclParsed::Invalid => None,
+        InstructionDeclParsed::Alias { referenced } => match parsed.get(*referenced) {
+            Some(InstructionDeclParsed::Normal(reference)) => Some(reference.clone()),
+            // The referent failed to parse, so its own error stands; the alias adds no misleading "not declared" report.
+            Some(InstructionDeclParsed::Invalid) => None,
+            Some(InstructionDeclParsed::Alias { .. }) => {
+                diags.push(Diagnostic::new(
+                    DiagnosticCode::ManifestShape,
+                    format!(
+                        "`provider.instructions.{}` `same-as` references `provider.instructions.{}`, which is itself a `same-as` alias; alias chains are not supported",
+                        ai.as_str(),
+                        referenced.as_str()
+                    ),
+                ));
+                None
+            }
+            None => {
+                diags.push(Diagnostic::new(
+                    DiagnosticCode::ManifestShape,
+                    format!(
+                        "`provider.instructions.{}` `same-as` references `provider.instructions.{}`, which is not declared",
+                        ai.as_str(),
+                        referenced.as_str()
+                    ),
+                ));
+                None
+            }
+        },
+    }
 }
 
 fn parse_source_decls(node: &KdlNode, kind: &str, diags: &mut Vec<Diagnostic>) -> Vec<SourceDecl> {
@@ -2223,6 +2418,230 @@ enozunu config-version=1 {
                 "instruction node argument must be rejected: {body}"
             );
         }
+    }
+
+    #[test]
+    fn resolves_a_same_as_instruction_alias_to_the_referenced_source() {
+        let text = manifest_with_instructions(
+            r#"      claude {
+        git {
+          url "https://example.com/r"
+          branch "main"
+          path "instructions/base.md"
+        }
+      }
+      codex same-as="provider.instructions.claude""#,
+            "",
+        );
+        let manifest = parse(&text).unwrap();
+        let expected = SourceReference::Git {
+            url: "https://example.com/r".to_owned(),
+            selector: GitSelector::Branch("main".to_owned()),
+            path: "instructions/base.md".to_owned(),
+        };
+        // The alias reuses the referenced source, so both targets resolve to the same source reference.
+        assert_eq!(
+            manifest.provider.instructions.claude,
+            Some(expected.clone())
+        );
+        assert_eq!(manifest.provider.instructions.codex, Some(expected));
+    }
+
+    #[test]
+    fn resolves_a_same_as_instruction_alias_declared_before_its_referent() {
+        // The alias appears first and points at a target declared later, so resolution must run after every target is parsed.
+        let text = manifest_with_instructions(
+            r#"      claude same-as="provider.instructions.codex"
+      codex { local { path "AGENTS.base.md" } }"#,
+            "",
+        );
+        let manifest = parse(&text).unwrap();
+        let expected = SourceReference::Local {
+            path: "AGENTS.base.md".to_owned(),
+        };
+        assert_eq!(
+            manifest.provider.instructions.claude,
+            Some(expected.clone())
+        );
+        assert_eq!(manifest.provider.instructions.codex, Some(expected));
+    }
+
+    #[test]
+    fn reuses_a_gist_instruction_source_through_same_as() {
+        let text = manifest_with_instructions(
+            r#"      claude {
+        gist {
+          id "2decf6c462d9b4418f2"
+          revision "468aac8caed5f0c3b859b8286968e2c78e2b8760"
+          file "CLAUDE.base.md"
+        }
+      }
+      codex same-as="provider.instructions.claude""#,
+            "",
+        );
+        let manifest = parse(&text).unwrap();
+        assert_eq!(
+            manifest.provider.instructions.codex,
+            manifest.provider.instructions.claude
+        );
+        assert!(matches!(
+            manifest.provider.instructions.codex,
+            Some(SourceReference::Gist { .. })
+        ));
+    }
+
+    #[test]
+    fn rejects_a_same_as_instruction_alias_to_an_undeclared_target() {
+        let text =
+            manifest_with_instructions(r#"      codex same-as="provider.instructions.claude""#, "");
+        let messages = messages(parse(&text));
+        assert!(
+            messages.iter().any(|m| m.contains("not declared")),
+            "{messages:?}"
+        );
+    }
+
+    #[test]
+    fn a_same_as_instruction_alias_to_a_malformed_target_does_not_report_it_as_undeclared() {
+        // The referent is declared but has no source reference block, so its own error stands and the alias must not add a misleading "not declared" report.
+        let text = manifest_with_instructions(
+            r#"      claude {}
+      codex same-as="provider.instructions.claude""#,
+            "",
+        );
+        let messages = messages(parse(&text));
+        assert!(
+            messages
+                .iter()
+                .any(|m| m.contains("instruction `claude`")
+                    && m.contains("source reference block")),
+            "the malformed referent's own error must be reported: {messages:?}"
+        );
+        assert!(
+            messages.iter().all(|m| !m.contains("not declared")),
+            "an alias to a malformed target must not be reported as undeclared: {messages:?}"
+        );
+    }
+
+    #[test]
+    fn rejects_a_same_as_instruction_alias_to_another_alias() {
+        let text = manifest_with_instructions(
+            r#"      claude same-as="provider.instructions.codex"
+      codex same-as="provider.instructions.claude""#,
+            "",
+        );
+        let messages = messages(parse(&text));
+        assert!(
+            messages
+                .iter()
+                .any(|m| m.contains("alias chains are not supported")),
+            "{messages:?}"
+        );
+    }
+
+    #[test]
+    fn rejects_a_self_referential_same_as_instruction_alias() {
+        let text = manifest_with_instructions(
+            r#"      claude same-as="provider.instructions.claude""#,
+            "",
+        );
+        let messages = messages(parse(&text));
+        assert!(
+            messages
+                .iter()
+                .any(|m| m.contains("must not reference itself")),
+            "{messages:?}"
+        );
+    }
+
+    #[test]
+    fn rejects_a_same_as_instruction_alias_referencing_a_use_skills_value() {
+        let text = manifest_with_instructions(
+            r#"      claude { local { path "CLAUDE.base.md" } }
+      codex same-as="consumer.claude.use-skills""#,
+            "",
+        );
+        let messages = messages(parse(&text));
+        assert!(
+            messages
+                .iter()
+                .any(|m| m.contains("different logical type")),
+            "{messages:?}"
+        );
+    }
+
+    #[test]
+    fn rejects_a_same_as_instruction_alias_with_an_unsupported_reference() {
+        let text = manifest_with_instructions(
+            r#"      claude { local { path "CLAUDE.base.md" } }
+      codex same-as="provider.instructions""#,
+            "",
+        );
+        let messages = messages(parse(&text));
+        assert!(
+            messages
+                .iter()
+                .any(|m| m.contains("not a supported reference")),
+            "{messages:?}"
+        );
+    }
+
+    #[test]
+    fn rejects_a_same_as_instruction_alias_combined_with_a_source_reference_block() {
+        let text = manifest_with_instructions(
+            r#"      claude { local { path "CLAUDE.base.md" } }
+      codex same-as="provider.instructions.claude" {
+        local { path "AGENTS.base.md" }
+      }"#,
+            "",
+        );
+        assert!(codes(parse(&text)).contains(&DiagnosticCode::ManifestShape));
+    }
+
+    #[test]
+    fn rejects_a_same_as_instruction_alias_with_a_positional_argument() {
+        let text = manifest_with_instructions(
+            r#"      claude { local { path "CLAUDE.base.md" } }
+      codex "x" same-as="provider.instructions.claude""#,
+            "",
+        );
+        assert!(codes(parse(&text)).contains(&DiagnosticCode::ManifestShape));
+    }
+
+    #[test]
+    fn rejects_a_non_string_same_as_value() {
+        let text = manifest_with_instructions(
+            r#"      claude { local { path "CLAUDE.base.md" } }
+      codex same-as=1"#,
+            "",
+        );
+        assert!(codes(parse(&text)).contains(&DiagnosticCode::ManifestShape));
+    }
+
+    #[test]
+    fn a_same_as_instruction_alias_satisfies_the_when_instruction_requirement() {
+        // After alias resolution `provider.instructions.codex` exists, so a codex `when` rule has its required base document source.
+        let text = r#"
+enozunu config-version=1 {
+  provider {
+    skills {
+      skill "a" { git { url "https://example.com/r"; branch "main"; path "s/a" } }
+    }
+    instructions {
+      claude { local { path "CLAUDE.base.md" } }
+      codex same-as="provider.instructions.claude"
+    }
+  }
+  consumer {
+    codex {
+      use-skills "a" {
+        when "reviewing code"
+      }
+    }
+  }
+}
+"#;
+        assert!(parse(text).is_ok());
     }
 
     #[test]

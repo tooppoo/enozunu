@@ -147,6 +147,7 @@ fn plan_target(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::git::GitSelector;
     use crate::manifest;
 
     #[test]
@@ -409,6 +410,54 @@ enozunu config-version=1 {
         assert_eq!(planned.len(), 1);
         assert_eq!(planned[0].target_rel_path, "AGENTS.md");
         assert_eq!(planned[0].source_name, "codex");
+    }
+
+    #[test]
+    fn a_same_as_instruction_alias_keeps_the_aliasing_targets_own_identity() {
+        // Codex reuses Claude's instruction source with `same-as`, so its planned instruction must carry Claude's source reference but keep Codex's own path, name, and target AI.
+        let text = r#"
+enozunu config-version=1 {
+  provider {
+    instructions {
+      claude {
+        git {
+          url "https://example.com/r"
+          branch "main"
+          path "instructions/base.md"
+        }
+      }
+      codex same-as="provider.instructions.claude"
+    }
+  }
+  consumer {
+    claude {}
+    codex {}
+  }
+}
+"#;
+        let planned = plan(&manifest::parse(text).unwrap()).unwrap();
+        let claude = planned
+            .iter()
+            .find(|e| e.kind == ArtifactKind::Instruction && e.target_ai == TargetAi::Claude)
+            .expect("a Claude instruction is planned");
+        let codex = planned
+            .iter()
+            .find(|e| e.kind == ArtifactKind::Instruction && e.target_ai == TargetAi::Codex)
+            .expect("a Codex instruction is planned");
+
+        // The reused source reference is shared, so both targets resolve the same commit and dedupe.
+        assert_eq!(codex.reference, claude.reference);
+        assert_eq!(
+            codex.reference,
+            SourceReference::Git {
+                url: "https://example.com/r".to_owned(),
+                selector: GitSelector::Branch("main".to_owned()),
+                path: "instructions/base.md".to_owned(),
+            }
+        );
+        // The aliasing target keeps its own identity: Codex writes AGENTS.md under its own source name, not Claude's.
+        assert_eq!(codex.source_name, "codex");
+        assert_eq!(codex.target_rel_path, "AGENTS.md");
     }
 
     #[test]

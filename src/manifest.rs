@@ -3065,6 +3065,12 @@ enozunu config-version=1 {
     }
 
     #[test]
+    fn rejects_a_non_string_use_skills_same_as_value() {
+        let text = consumer_targets(r#"      use-skills "a""#, r#"      use-skills same-as=5"#);
+        assert!(codes(parse(&text)).contains(&DiagnosticCode::ManifestShape));
+    }
+
+    #[test]
     fn rejects_a_use_skills_alias_that_also_names_skills() {
         let text = consumer_targets(
             r#"      use-skills "a""#,

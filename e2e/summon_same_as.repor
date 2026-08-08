@@ -104,7 +104,9 @@ case "validate rejects a use-skills same-as alias to an undeclared consumer" {
   $ enozunu validate
   assert {
     exit 1
-    stderr contains "is not declared"
+    # Pin the referenced consumer target, not the bare "is not declared"
+    # phrase, so the case cannot pass on an unrelated diagnostic.
+    stderr contains "`consumer.claude` is not declared"
   }
 }
 
@@ -171,6 +173,8 @@ case "validate rejects an instruction same-as alias to an undeclared target" {
   $ enozunu validate
   assert {
     exit 1
-    stderr contains "which is not declared"
+    # Pin the referenced instruction target, not the bare "which is not
+    # declared" phrase, so the case asserts the intended diagnostic.
+    stderr contains "`provider.instructions.claude`, which is not declared"
   }
 }

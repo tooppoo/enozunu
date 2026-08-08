@@ -113,6 +113,7 @@ instructions {
 - The source must resolve to a regular UTF-8 text file.
 - Declaring `provider.instructions.<target>` is an explicit opt-in that transfers ownership of the corresponding root file (`CLAUDE.md` / `AGENTS.md`) to Enozunu; see [the generated output guide](generated-output.md#root-instruction-files) for the operational consequences.
 - A declared source without a corresponding `consumer` target is not resolved, locked, or materialized, like an unselected Skill.
+- A target may reuse another target's instruction source instead of declaring its own block; see [Reusing Values with `same-as`](#reusing-values-with-same-as).
 
 See [Root Instructions](#root-instructions) for what is generated, and [the root repository instructions ADR](../design/adr/20260803T172859Z_generate-root-repository-instructions-from-manifest.md) for why instruction generation is an Enozunu responsibility and where its boundaries lie.
 
@@ -395,6 +396,8 @@ Each `when` is free text describing a usage situation. Enozunu inserts the value
 
 The blockless and block forms mix freely and aggregate in declaration order, per [Selection Node Aggregation](#selection-node-aggregation). Grouping several Skills inside one block is not supported.
 
+A target may reuse another target's whole `use-skills` selection instead of listing Skills itself; see [Reusing Values with `same-as`](#reusing-values-with-same-as).
+
 ### Agents
 
 `use-agents` selects agent sources by name. Each referenced name must exist under `provider.agents`.
@@ -449,6 +452,91 @@ A selection without `when` produces the first form; each `when` produces one ind
 
 Enozunu provides no template syntax, no variable expansion, and no interpretation of instruction content; the composition rules and their boundaries are recorded in [the root repository instructions ADR](../design/adr/20260803T172859Z_generate-root-repository-instructions-from-manifest.md). For ownership, Git management, and pruning behavior of the generated files, see [the generated output guide](generated-output.md#root-instruction-files).
 
+## Reusing Values with `same-as`
+
+Two logical values may be reused from another target instead of being repeated: an instruction source (`provider.instructions.<target>`) and a Skill selection (`consumer.<target>.use-skills`).
+
+A `same-as` property reuses the referenced target's normalized value as-is:
+
+```kdl
+<node> same-as="<reference>"
+```
+
+`same-as` is an alias, not inheritance, merge, or override. The declaration produces exactly the referenced value, with nothing added, removed, or changed. It reuses the manifest's logical value, not the KDL syntax tree, so the referenced value is used after it is normalized.
+
+### Supported references
+
+`same-as` accepts only this fixed set of references, not an arbitrary manifest path expression:
+
+```text
+provider.instructions.claude
+provider.instructions.codex
+consumer.claude.use-skills
+consumer.codex.use-skills
+```
+
+The referenced value and the declaring value must be the same logical type: an instruction declaration may reference only another instruction declaration, and a `use-skills` selection may reference only another `use-skills` selection. When a future setting needs reuse, its logical type and reference paths are added individually rather than through a general path syntax.
+
+### Rules
+
+- The `same-as` value must be a string naming one of the supported references above.
+- The referenced value and the declaring value must be the same logical type.
+- A declaration must not reference itself.
+- The reference must point at a normal declaration, not another `same-as` declaration; alias chains are not supported.
+- One logical value must not be declared both normally and with `same-as`.
+
+Alias resolution runs before the rest of validation, so a reused value receives the same validation as a value declared directly. In particular, a reused `use-skills` selection that carries a `when` rule still requires the referencing target's own `provider.instructions.<target>` source, per the [Skills](#skills) `when` rule. Enozunu reports as many `same-as` errors as it can in one run.
+
+### Extension to the standard declaration shapes
+
+The `same-as` alias is a deliberate exception to the normal declaration shapes; every other shape rule for the normal forms is unchanged.
+
+- A normal `use-skills` node rejects all properties. The alias form is the sole exception: it carries only the `same-as` property, with no Skill-name argument and no `when` children.
+- A normal `provider.instructions.<target>` requires exactly one source reference block. The alias form replaces that block with the `same-as` property and declares no children.
+
+### Instruction sources
+
+`provider.instructions.<target>` may reuse another target's instruction declaration instead of declaring its own source reference block:
+
+```kdl
+instructions {
+  claude {
+    local { path "CLAUDE.base.md" }
+  }
+
+  codex same-as="provider.instructions.claude"
+}
+```
+
+Both targets then use the same base document source. This is not a semantic conversion between target AIs; it reuses one source artifact as the base document for both. The referenced instruction must be declared and must not itself be a `same-as` declaration.
+
+The aliasing target keeps its own identity. Its target AI, target path, and provenance stay its own, and only the source reference is reused, so resolution deduplication, the lock file, `enozunu summon --update`, `--frozen`, provenance, and materialization all treat it exactly like a normal declaration.
+
+### Skill selections
+
+`consumer.<target>.use-skills` may reuse another target's normalized Skill selections, including their `when` rules:
+
+```kdl
+consumer {
+  claude {
+    use-skills "documentation-writing" {
+      when "updating documentation"
+    }
+    use-skills "code-comment"
+    use-agents "reviewer-claude"
+  }
+
+  codex {
+    use-skills same-as="consumer.claude.use-skills"
+    use-agents "reviewer-codex"
+  }
+}
+```
+
+The alias reuses the referenced target's whole normalized `use-skills` value, in declaration order, rather than copying the referenced target's individual KDL nodes. `use-agents` is unaffected.
+
+A `same-as` `use-skills` must be the target's only `use-skills` declaration, because it is a complete alias rather than an addition to local selections. If the referenced target's `consumer` block declares no `use-skills`, an empty selection is reused. If the referenced `consumer` block does not exist at all, that is an error.
+
 ## Unsupported
 
 The following are not supported in v0.0.x:
@@ -465,6 +553,12 @@ Gist branch, tag, or abbreviated revision selectors
 nested Skill root selection inside a Gist
 nested (sub-directory) instruction files
 template syntax or variable expansion in instruction base documents
+same-as references outside the four supported paths
+same-as across different logical types
+same-as alias chains
+same-as on use-agents
+aliasing a whole consumer target
+merging into or overriding a same-as value
 ```
 
 Codex support is limited to Skill and custom agent materialization plus root `AGENTS.md` generation. `.codex/config.toml` and Codex rules, MCP, hooks, and plugins are out of scope.
@@ -514,6 +608,13 @@ v0.0.x should reject:
 - `when` rules whose target has no declared instruction source
 - instruction base documents that are not valid UTF-8
 - a directory occupying a root instruction target path
+- `same-as` values that are not strings, name an unsupported reference, or name a different logical type
+- self-referential `same-as`, and `same-as` referencing another `same-as` declaration
+- declaring one logical value both normally and with `same-as`
+- a `use-skills same-as` alias combined with a Skill-name argument, another property, `when` children, or any other `use-skills` selection
+- a `use-skills same-as` alias whose referenced `consumer` block does not exist
+- a `provider.instructions.<target>` `same-as` alias combined with a positional argument, another property, or a source reference block
+- a `provider.instructions.<target>` `same-as` alias whose referenced instruction is undeclared
 
 v0.0.x should not reject a source merely because its URL or path is not under `.claude/`.
 

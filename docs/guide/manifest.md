@@ -237,6 +237,8 @@ Local sources also keep the filesystem safety policy:
 - a local source path that equals, contains, or is contained by any target path materialized in the same run is rejected
 
 Target paths are canonicalized through any existing symlinked ancestors before the overlap comparison, so a symlinked `.claude/skills` cannot hide an overlap.
+A symlink at the final target path component is compared as its own path rather than as its destination, because materialization replaces that symlink itself; a local source that is merely the destination of a final target symlink does not overlap.
+The full symlink replacement contract is described in [the generated output guide](generated-output.md#symlinked-target-paths).
 
 ### Gist Source Reference
 

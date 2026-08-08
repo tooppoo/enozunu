@@ -94,6 +94,8 @@ Replace semantics applies to the declared target path itself, and a symlink at t
 
 This contract is the same for every source kind (`git`, `local`, `gist`) and every artifact kind, including root instruction files.
 
+## Editing Generated Output by Hand
+
 Enozunu does not preserve, detect, merge, or reconcile manual edits inside generated output. A hand edit inside a generated directory such as `.claude/`, `.agents/`, or `.codex/` is not source of truth, and it is lost on the next regeneration.
 
 If an edit should be durable, use one of these approaches:

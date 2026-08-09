@@ -66,13 +66,7 @@ enozunu config-version=1 {
           path "instructions/base.md"
         }       
       }
-      codex {
-         git {
-          url "https://github.com/tooppoo/catalog-agent-tools"
-          branch "main"
-          path "instructions/base.md"
-        }       
-      }
+      codex same-as="provider.instructions.claude"
     }
 
     // agents {
@@ -110,25 +104,7 @@ enozunu config-version=1 {
       }
     }
     codex {
-      use-skills "documentation-writing" {
-        when "updating documentation"
-        when "writing or modifying code comments"
-      }
-      use-skills "subagent-review-loop" {
-        when "After completing file edits, before reporting completion, unless the user explicitly instructs otherwise"
-      }
-      use-skills "code-comment" {
-        when "writing or modifying code comments"
-      }
-      use-skills "cli-output-design" {
-        when "design or implemnts CLI output"
-      }
-      use-skills "reportage" {
-        when "implments e2e test"
-      }
-      use-skills "review-sized-implementation" {
-        when "during implementation work"
-      }
+      use-skills same-as="consumer.claude.use-skills"
     }
   }
 }

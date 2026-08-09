@@ -1,0 +1,10 @@
+{
+  "kind": "added",
+  "targets": [
+    "cli"
+  ],
+  "links": [
+    "https://github.com/tooppoo/enozunu/issues/53"
+  ],
+  "body": "a manifest target can reuse another target's instruction source and use-skills selection with same-as instead of repeating them"
+}

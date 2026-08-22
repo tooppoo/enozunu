@@ -50,6 +50,13 @@ enozunu config-version=1 {
         }
       }
 
+      skill "github-cli" {
+        git {
+          url "https://github.com/cli/cli"
+          tag "v2.98.0"
+          path "skills/gh"
+        }
+      }
       // skill "japanese-note" {
       //   gist {
       //     id "fd287c3133457c4fd8f5601d34aa817d"
@@ -64,7 +71,7 @@ enozunu config-version=1 {
           url "https://github.com/tooppoo/catalog-agent-tools"
           branch "main"
           path "instructions/base.md"
-        }       
+        }
       }
       codex same-as="provider.instructions.claude"
     }
@@ -101,6 +108,9 @@ enozunu config-version=1 {
       }
       use-skills "review-sized-implementation" {
         when "during implementation work"
+      }
+      use-skills "github-cli" {
+        when "access to github remote to push, pull, create PR, create Issue and other"
       }
     }
     codex {

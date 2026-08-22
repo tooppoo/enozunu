@@ -98,6 +98,22 @@
       "target_path": ".claude/skills/review-sized-implementation"
     },
     {
+      "source_name": "github-cli",
+      "kind": "skill",
+      "source": {
+        "type": "git",
+        "url": "https://github.com/cli/cli",
+        "selector": {
+          "type": "tag",
+          "value": "v2.98.0"
+        },
+        "path": "skills/gh",
+        "resolved_revision": "a255baf71d13fe5947a4eb7ad521ffd412d64cee"
+      },
+      "target_ai": "claude",
+      "target_path": ".claude/skills/github-cli"
+    },
+    {
       "source_name": "claude",
       "kind": "instruction",
       "source": {
@@ -208,6 +224,22 @@
       },
       "target_ai": "codex",
       "target_path": ".agents/skills/review-sized-implementation"
+    },
+    {
+      "source_name": "github-cli",
+      "kind": "skill",
+      "source": {
+        "type": "git",
+        "url": "https://github.com/cli/cli",
+        "selector": {
+          "type": "tag",
+          "value": "v2.98.0"
+        },
+        "path": "skills/gh",
+        "resolved_revision": "a255baf71d13fe5947a4eb7ad521ffd412d64cee"
+      },
+      "target_ai": "codex",
+      "target_path": ".agents/skills/github-cli"
     },
     {
       "source_name": "codex",

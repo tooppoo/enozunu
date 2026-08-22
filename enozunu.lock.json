@@ -2,6 +2,14 @@
   "version": 1,
   "entries": [
     {
+      "url": "https://github.com/cli/cli",
+      "selector": {
+        "type": "tag",
+        "value": "v2.98.0"
+      },
+      "resolved_revision": "a255baf71d13fe5947a4eb7ad521ffd412d64cee"
+    },
+    {
       "url": "https://github.com/tooppoo/catalog-agent-tools",
       "selector": {
         "type": "branch",

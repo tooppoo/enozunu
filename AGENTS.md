@@ -28,3 +28,4 @@ Divide multiple major decisions, behavioral changes, mechanical refactorings, an
 - When design or implemnts CLI output, always use the `cli-output-design` skill.
 - When implments e2e test, always use the `reportage` skill.
 - When during implementation work, always use the `review-sized-implementation` skill.
+- When access to github remote to push, pull, create PR, create Issue and other, always use the `github-cli` skill.

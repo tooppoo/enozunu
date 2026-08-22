@@ -235,6 +235,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(unix)]
     fn refuses_dangling_symlink_at_manifest_path() {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("enozunu.kdl");

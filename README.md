@@ -23,6 +23,13 @@ See [Why or Why Not Enozunu?](docs/guide/why-or-why-not.md) for the detailed use
 brew install tooppoo/tap-catalog/enozunu
 ```
 
+### Scoop(Windows)
+
+```ps
+scoop bucket add philomagi https://github.com/tooppoo/catalog-scoop-bucket
+scoop install enozunu
+```
+
 ### curl install
 
 ```sh

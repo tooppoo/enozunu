@@ -1,8 +1,0 @@
-{
-  "kind": "added",
-  "targets": [
-    "cli"
-  ],
-  "links": [],
-  "body": "release archives include a Windows x86_64 binary (enozunu.exe), enabling distribution via Scoop"
-}

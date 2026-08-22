@@ -17,6 +17,14 @@ See [Why or Why Not Enozunu?](docs/guide/why-or-why-not.md) for the detailed use
 
 ## Quick Start
 
+### homebrew
+
+```sh
+brew install tooppoo/tap-catalog/enozunu
+```
+
+### curl install
+
 ```sh
 curl -fsSL https://raw.githubusercontent.com/tooppoo/enozunu/refs/heads/main/install.sh | sh
 ```

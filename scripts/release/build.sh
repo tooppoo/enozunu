@@ -11,5 +11,10 @@ cargo build \
   --quiet \
   --target "$target"
 
+case "$target" in
+  *-windows-*) bin=enozunu.exe ;;
+  *) bin=enozunu ;;
+esac
+
 mkdir -p "${dist}"
-cp "target/${target}/release/enozunu" "${dist}/enozunu"
+cp "target/${target}/release/${bin}" "${dist}/${bin}"

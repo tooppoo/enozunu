@@ -85,6 +85,26 @@
           "path": "README.md"
         }
       ]
+    },
+    {
+      "id": "windows-x86_64",
+      "runner": "windows-2025",
+      "os": "Windows",
+      "arch": "x86_64",
+      "target": "x86_64-pc-windows-msvc",
+      "archive": "tar.gz",
+      "archive_files": [
+        {
+          "path": "build/bin/enozunu.exe",
+          "dest": "enozunu.exe"
+        },
+        {
+          "path": "LICENSE"
+        },
+        {
+          "path": "README.md"
+        }
+      ]
     }
   ],
   "installer_smoke_test": {

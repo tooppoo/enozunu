@@ -55,6 +55,24 @@ jobs:
           files: cov.json
           fail_ci_if_error: false
 
+  # The release workflow builds the Windows binary only on version tags, so
+  # without this job a Windows-only compile break would surface for the first
+  # time mid-release. Compile-check only (no test execution): several tests
+  # exercise unix-specific behavior and are cfg-gated out on Windows, so
+  # running them here would not add coverage worth the runner cost.
+  check-windows:
+    runs-on: windows-2025
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+
+      - name: Install Rust toolchain
+        run: rustup show
+
+      - uses: Swatinem/rust-cache@c19371144df3bb44fab255c43d04cbc2ab54d1c4 # v2.9.1
+
+      - name: cargo check
+        run: cargo check --locked --all-targets --target x86_64-pc-windows-msvc
+
   installer-smoke-test:
     uses: tooppoo/github-release-workflows/.github/workflows/wf-installer-smoke-test.yml@main
     with:

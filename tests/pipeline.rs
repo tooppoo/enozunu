@@ -503,6 +503,7 @@ fn rejects_skill_source_without_skill_md() {
 }
 
 #[test]
+#[cfg(unix)]
 fn rejects_symlink_inside_skill_source() {
     let project = setup();
     let secret = project.source_repo.join("secret.txt");
@@ -744,6 +745,7 @@ fn records_local_provenance_with_resolved_path() {
 }
 
 #[test]
+#[cfg(unix)]
 fn rejects_symlinked_local_skill_source_path() {
     let project = setup();
     let local_src = setup_local_source(&project);
@@ -813,6 +815,7 @@ enozunu config-version=1 {
 }
 
 #[test]
+#[cfg(unix)]
 fn rejects_local_source_whose_target_resolves_onto_it_through_a_symlink() {
     let project = setup();
     // `.claude/skills` is a symlink out of the project, so the `shared-skill` target resolves onto the source itself; materializing would destroy the source.

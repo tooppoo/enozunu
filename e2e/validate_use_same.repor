@@ -1,4 +1,5 @@
-# E2E: `enozunu validate` reports `use-same-skills` / `use-same-agents` misuse.
+# E2E: `enozunu validate` reports `use-same-skills` / `use-same-agents` /
+# `use-same-instruction` misuse.
 #
 # These cases pin the user-visible diagnostic wording for the reference and
 # shape rules of `use-same-*` (issue #60); the unit tests assert only the
@@ -130,5 +131,128 @@ case "validate rejects a use-same-agents reference cycle" {
   assert {
     exit 1
     stderr contains "forms a reference cycle"
+  }
+}
+
+case "validate rejects use-same-instruction referencing an undeclared target" {
+  write <"enozunu.kdl"> ```
+    enozunu config-version=1 {
+      provider {
+        instructions {
+          codex {
+            use-same-instruction "claude"
+          }
+        }
+      }
+      consumer {
+        codex {}
+      }
+    }
+    ```
+  $ enozunu validate
+  assert {
+    exit 1
+    stderr contains "`provider.instructions.codex` `use-same-instruction` references `provider.instructions.claude`, which is not declared"
+  }
+}
+
+case "validate rejects a self-referential use-same-instruction" {
+  write <"enozunu.kdl"> ```
+    enozunu config-version=1 {
+      provider {
+        instructions {
+          claude {
+            use-same-instruction "claude"
+          }
+        }
+      }
+      consumer {
+        claude {}
+      }
+    }
+    ```
+  $ enozunu validate
+  assert {
+    exit 1
+    stderr contains "`use-same-instruction` under `provider.instructions.claude` must not reference itself"
+  }
+}
+
+case "validate rejects a use-same-instruction reference cycle" {
+  write <"enozunu.kdl"> ```
+    enozunu config-version=1 {
+      provider {
+        instructions {
+          claude {
+            use-same-instruction "codex"
+          }
+          codex {
+            use-same-instruction "claude"
+          }
+        }
+      }
+      consumer {
+        claude {}
+      }
+    }
+    ```
+  $ enozunu validate
+  assert {
+    exit 1
+    stderr contains "forms a reference cycle"
+  }
+}
+
+case "validate rejects multiple use-same-instruction nodes in one target" {
+  write <"base.md"> ```
+    # Base
+    ```
+  write <"enozunu.kdl"> ```
+    enozunu config-version=1 {
+      provider {
+        instructions {
+          claude { local { path "base.md" } }
+          codex {
+            use-same-instruction "claude"
+            use-same-instruction "claude"
+          }
+        }
+      }
+      consumer {
+        codex {}
+      }
+    }
+    ```
+  $ enozunu validate
+  assert {
+    exit 1
+    stderr contains "at most one is allowed"
+  }
+}
+
+case "validate rejects combining use-same-instruction with a source reference block" {
+  write <"base.md"> ```
+    # Base
+    ```
+  write <"enozunu.kdl"> ```
+    enozunu config-version=1 {
+      provider {
+        instructions {
+          claude { local { path "base.md" } }
+          codex {
+            use-same-instruction "claude"
+            local { path "base.md" }
+          }
+        }
+      }
+      consumer {
+        codex {}
+      }
+    }
+    ```
+  $ enozunu validate
+  assert {
+    exit 1
+    stderr contains "must not combine `use-same-instruction` with a source reference block"
   }
 }

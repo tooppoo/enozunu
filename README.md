@@ -2,7 +2,7 @@
 
 <img src="./docs/assets/enozunu-icon.png" height="200" width="auto">
 
-Enozunu(`役小角`) is a cross-provider configuration materializer for AI agent tooling.
+Enozunu(`役小角`) is a declarative, reproducible cross-provider configuration materializer for AI agent tooling.
 
 It centralizes human-authored definitions of AI-agent configuration sources and materializes them into target AI-native configuration paths.
 
@@ -51,7 +51,7 @@ curl -fsSL https://raw.githubusercontent.com/tooppoo/enozunu/refs/heads/main/ins
 
 Enozunu manages where AI-agent configuration comes from and where it is materialized. You declare sources once in `enozunu.kdl`, and Enozunu resolves them and writes them into each target AI's native paths.
 
-Each run resolves the declared sources, records the resolved commits of mutable selections in `enozunu.lock.json`, and materializes them into target paths. CI verifies the result with `enozunu summon --frozen`, which materializes strictly from the lock and fails when the lock does not cover a mutable source.
+Each run resolves the declared sources, records the resolved commits of mutable selections in `enozunu.lock.json`, and materializes them into target paths. In CI, `enozunu summon --frozen` materializes strictly from the lock and fails when the lock file is missing or lacks an entry for a mutable source; a clean `git status` after that run verifies that the committed files have not drifted from the declared sources.
 
 The supported target AIs are Claude and Codex. Both select from the same source pool, and each selection is materialized into that target's native path. For the exact placement of each artifact, see [the supported targets guide](docs/guide/support.md).
 

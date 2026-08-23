@@ -1,5 +1,42 @@
 # CHANGELOG
 
+## 0.5.0
+
+### changed
+
+#### cli
+
+<!-- rellog:entry:start -->
+<!-- rellog:body:start -->
+selecting the same skill or agent more than once in one target is now valid: every declaration and its when rules are kept for instruction generation, while the artifact materializes once per target
+<!-- rellog:body:end -->
+
+Refs:
+- https://github.com/tooppoo/enozunu/issues/60
+<!-- rellog:entry:end -->
+
+### added
+
+#### cli
+
+<!-- rellog:entry:start -->
+<!-- rellog:body:start -->
+use-same-skills / use-same-agents nodes additively reuse another target's effective use-skills / use-agents sequence at the declaration position, with cycle and absent-target validation
+<!-- rellog:body:end -->
+
+Refs:
+- https://github.com/tooppoo/enozunu/issues/60
+<!-- rellog:entry:end -->
+
+<!-- rellog:entry:start -->
+<!-- rellog:body:start -->
+use-same-instruction reuses another target's effective instruction source; an instruction source is exactly one of a direct source block, use-same-instruction, or legacy same-as
+<!-- rellog:body:end -->
+
+Refs:
+- https://github.com/tooppoo/enozunu/issues/60
+<!-- rellog:entry:end -->
+
 ## 0.4.0
 
 ### added

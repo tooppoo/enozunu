@@ -113,7 +113,7 @@ instructions {
 - The source must resolve to a regular UTF-8 text file.
 - Declaring `provider.instructions.<target>` is an explicit opt-in that transfers ownership of the corresponding root file (`CLAUDE.md` / `AGENTS.md`) to Enozunu; see [the generated output guide](generated-output.md#root-instruction-files) for the operational consequences.
 - A declared source without a corresponding `consumer` target is not resolved, locked, or materialized, like an unselected Skill.
-- A target may reuse another target's instruction source instead of declaring its own block; see [Reusing Values with `same-as`](#reusing-values-with-same-as).
+- A target may reuse another target's instruction source instead of declaring its own block; see [`use-same-instruction`](#use-same-instruction).
 
 See [Root Instructions](#root-instructions) for what is generated, and [the root repository instructions ADR](../design/adr/20260803T172859Z_generate-root-repository-instructions-from-manifest.md) for why instruction generation is an Enozunu responsibility and where its boundaries lie.
 
@@ -348,7 +348,8 @@ Agent sources are target-native. A Claude agent is a Markdown file and a Codex c
 ### Selection Node Aggregation
 
 A target block may declare `use-skills` and `use-agents` nodes more than once.
-Repeated nodes of the same kind concatenate in declaration order, so the grouped form and the split form select the same sources in the same order:
+Repeated nodes of the same kind concatenate in declaration order, so the grouped form and the split form select the same sources in the same order.
+[`use-same-skills` and `use-same-agents`](#use-same-skills-and-use-same-agents) nodes join the same concatenation, expanding at their own position:
 
 ```kdl
 use-skills "git-kura" "semantic-line-breaks"
@@ -398,7 +399,7 @@ Each `when` is free text describing a usage situation. Enozunu inserts the value
 
 The blockless and block forms mix freely and aggregate in declaration order, per [Selection Node Aggregation](#selection-node-aggregation). Grouping several Skills inside one block is not supported.
 
-A target may reuse another target's whole `use-skills` selection instead of listing Skills itself; see [Reusing Values with `same-as`](#reusing-values-with-same-as).
+A target may reuse another target's Skill selections instead of repeating them; see [`use-same-skills` and `use-same-agents`](#use-same-skills-and-use-same-agents).
 
 ### Agents
 
@@ -454,9 +455,73 @@ A selection without `when` produces the first form; each `when` produces one ind
 
 Enozunu provides no template syntax, no variable expansion, and no interpretation of instruction content; the composition rules and their boundaries are recorded in [the root repository instructions ADR](../design/adr/20260803T172859Z_generate-root-repository-instructions-from-manifest.md). For ownership, Git management, and pruning behavior of the generated files, see [the generated output guide](generated-output.md#root-instruction-files).
 
-## Reusing Values with `same-as`
+## Reusing Values Across Targets with `use-same-*`
 
-Two logical values may be reused from another target instead of being repeated: an instruction source (`provider.instructions.<target>`) and a Skill selection (`consumer.<target>.use-skills`).
+Three logical values may be reused from another target instead of being repeated, each through a dedicated node:
+
+```text
+use-same-skills "<target>"       (inside consumer.<target>)
+use-same-agents "<target>"       (inside consumer.<target>)
+use-same-instruction "<target>"  (inside provider.instructions.<target>)
+```
+
+`<target>` names the referenced target (`claude` or `codex`). Each node carries exactly one string argument and nothing else: no properties, no children. The node name fixes which logical value is reused, so no path expression is needed.
+
+`use-same-*` reuses the referenced target's *effective* value — the value after the referenced target's own references are resolved — not its KDL syntax tree. References resolve after the whole manifest is parsed, so a target may reference a sibling declared later in the file.
+
+The following are errors: referencing the declaring target itself, a reference cycle between targets, referencing a `consumer` target or instruction declaration that does not exist, and naming an unsupported target. A referenced target that exists but declares nothing is a valid no-op, not an error.
+
+### `use-same-skills` and `use-same-agents`
+
+`use-same-skills` expands the referenced target's effective `use-skills` declaration list at the node's own position; `use-same-agents` does the same for `use-agents`. The expansion is additive: it joins the declaration-order concatenation described in [Selection Node Aggregation](#selection-node-aggregation), mixes freely with local selections, and may appear more than once.
+
+```kdl
+consumer {
+  claude {
+    use-skills "documentation-writing"
+    use-skills "review" {
+      when "reviewing code"
+    }
+    use-agents "reviewer"
+  }
+
+  codex {
+    use-same-skills "claude"
+    use-same-agents "claude"
+    use-skills "codex-specific"
+  }
+}
+```
+
+Codex's effective `use-skills` is Claude's effective declarations followed by `codex-specific`, in that order. Duplicates introduced by the expansion are kept, per [Selection Node Aggregation](#selection-node-aggregation): each declaration retains its own `when` rules and reaches the generated root instructions, while the artifact still materializes once per target.
+
+An expanded declaration receives the same validation as one written directly. In particular, an expanded `use-skills` selection that carries a `when` rule still requires the referencing target's own `provider.instructions.<target>` source, per the [Skills](#skills) `when` rule.
+
+### `use-same-instruction`
+
+An instruction source is singular, so `use-same-instruction` is the target's whole declaration rather than an addition:
+
+```kdl
+instructions {
+  claude {
+    local { path "CLAUDE.base.md" }
+  }
+
+  codex {
+    use-same-instruction "claude"
+  }
+}
+```
+
+A target's instruction source is exactly one of a source reference block (`git` / `local` / `gist`), one `use-same-instruction`, or a legacy `same-as` alias; combining them, or declaring `use-same-instruction` more than once, is an error.
+
+The referencing target keeps its own identity. Its target AI, target path, and provenance stay its own, and only the source reference is reused, so resolution deduplication, the lock file, `enozunu summon --update`, `--frozen`, provenance, and materialization all treat it exactly like a direct declaration. Reuse is not a semantic conversion between target AIs; it makes one source artifact the base document for both.
+
+## Legacy: Reusing Values with `same-as`
+
+`same-as` is the legacy reuse form that predates `use-same-*`. It remains accepted so released `config-version=1` manifests keep working, but it is deprecated and planned for removal; new manifests should use [`use-same-*`](#reusing-values-across-targets-with-use-same-) instead.
+
+Two logical values may be reused from another target with `same-as`: an instruction source (`provider.instructions.<target>`) and a Skill selection (`consumer.<target>.use-skills`).
 
 A `same-as` property reuses the referenced target's normalized value as-is:
 
@@ -483,9 +548,9 @@ The referenced value and the declaring value must be the same logical type: an i
 
 - The `same-as` value must be a string naming one of the supported references above.
 - The referenced value and the declaring value must be the same logical type.
-- A declaration must not reference itself.
-- The reference must point at a normal declaration, not another `same-as` declaration; alias chains are not supported.
-- One logical value must not be declared both normally and with `same-as`.
+- A declaration must not reference itself, and a reference cycle between targets is an error.
+- The reference must point at a declaration that is not itself a `same-as` declaration; alias chains are not supported. A reference to a target composed with `use-same-*` is allowed and resolves to that target's effective value.
+- One logical value must not be declared both with `same-as` and in any other way: not normally, and not with `use-same-*`.
 
 Alias resolution runs before the rest of validation, so a reused value receives the same validation as a value declared directly. In particular, a reused `use-skills` selection that carries a `when` rule still requires the referencing target's own `provider.instructions.<target>` source, per the [Skills](#skills) `when` rule. Enozunu reports as many `same-as` errors as it can in one run.
 
@@ -510,9 +575,7 @@ instructions {
 }
 ```
 
-Both targets then use the same base document source. This is not a semantic conversion between target AIs; it reuses one source artifact as the base document for both. The referenced instruction must be declared and must not itself be a `same-as` declaration.
-
-The aliasing target keeps its own identity. Its target AI, target path, and provenance stay its own, and only the source reference is reused, so resolution deduplication, the lock file, `enozunu summon --update`, `--frozen`, provenance, and materialization all treat it exactly like a normal declaration.
+Both targets then use the same base document source, with the same identity rules as [`use-same-instruction`](#use-same-instruction). The referenced instruction must be declared and must not itself be a `same-as` declaration, and the alias must not be combined with a source reference block or `use-same-instruction`.
 
 ### Skill selections
 
@@ -537,7 +600,7 @@ consumer {
 
 The alias reuses the referenced target's whole normalized `use-skills` value, in declaration order, rather than copying the referenced target's individual KDL nodes. `use-agents` is unaffected.
 
-A `same-as` `use-skills` must be the target's only `use-skills` declaration, because it is a complete alias rather than an addition to local selections. If the referenced target's `consumer` block declares no `use-skills`, an empty selection is reused. If the referenced `consumer` block does not exist at all, that is an error.
+A `same-as` `use-skills` must be the target's only `use-skills` declaration — it must not share the target with normal `use-skills` or `use-same-skills` nodes — because it is a complete alias rather than an addition to local selections. If the referenced target's `consumer` block declares no `use-skills`, an empty selection is reused. If the referenced `consumer` block does not exist at all, that is an error.
 
 ## Unsupported
 

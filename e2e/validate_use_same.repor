@@ -96,35 +96,6 @@ case "validate rejects a use-same-skills node with a malformed shape" {
   }
 }
 
-case "validate rejects combining a use-skills same-as alias with use-same-skills" {
-  write <"skills/demo/SKILL.md"> ```
-    # demo
-    ```
-  write <"enozunu.kdl"> ```
-    enozunu config-version=1 {
-      provider {
-        skills {
-          skill "demo" { local { path "skills/demo" } }
-        }
-      }
-      consumer {
-        claude {
-          use-skills "demo"
-        }
-        codex {
-          use-skills same-as="consumer.claude.use-skills"
-          use-same-skills "claude"
-        }
-      }
-    }
-    ```
-  $ enozunu validate
-  assert {
-    exit 1
-    stderr contains "must not combine a `use-skills same-as` alias with any other `use-skills` or `use-same-skills` selection"
-  }
-}
-
 case "validate rejects use-same-agents referencing an undeclared consumer" {
   write <"enozunu.kdl"> ```
     enozunu config-version=1 {

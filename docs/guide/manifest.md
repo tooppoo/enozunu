@@ -469,7 +469,7 @@ use-same-instruction "<target>"  (inside provider.instructions.<target>)
 
 `use-same-*` reuses the referenced target's *effective* value — the value after the referenced target's own references are resolved — not its KDL syntax tree. References resolve after the whole manifest is parsed, so a target may reference a sibling declared later in the file.
 
-The following are errors: referencing the declaring target itself, a reference cycle between targets, referencing a `consumer` target or instruction declaration that does not exist, and naming an unsupported target. A referenced target that exists but declares nothing is a valid no-op, not an error.
+The following are errors: referencing the declaring target itself, a reference cycle between targets, referencing a `consumer` target or instruction declaration that does not exist, and naming an unsupported target. For `use-same-skills` / `use-same-agents`, a referenced `consumer` target that exists but selects nothing is a valid no-op expansion, not an error; an instruction reference has no empty form, because every declared instruction source must be valid.
 
 ### `use-same-skills` and `use-same-agents`
 
@@ -673,10 +673,16 @@ v0.0.x should reject:
 - `when` rules whose target has no declared instruction source
 - instruction base documents that are not valid UTF-8
 - a directory occupying a root instruction target path
+- `use-same-*` nodes that do not carry exactly one string target argument, or that declare properties or a child block
+- `use-same-*` nodes naming an unsupported target
+- self-referential `use-same-*`, and `use-same-*` reference cycles between targets
+- `use-same-skills` / `use-same-agents` references to an undeclared `consumer` target
+- `use-same-instruction` references to an undeclared instruction declaration
+- `use-same-instruction` combined with a source reference block, and more than one `use-same-instruction` per target
 - `same-as` values that are not strings, name an unsupported reference, or name a different logical type
-- self-referential `same-as`, and `same-as` referencing another `same-as` declaration
-- declaring one logical value both normally and with `same-as`
-- a `use-skills same-as` alias combined with a Skill-name argument, another property, `when` children, or any other `use-skills` selection
+- self-referential `same-as`, `same-as` reference cycles, and `same-as` referencing another `same-as` declaration
+- declaring one logical value both with `same-as` and in any other way, normally or with `use-same-*`
+- a `use-skills same-as` alias combined with a Skill-name argument, another property, `when` children, or any other `use-skills` or `use-same-skills` selection
 - a `use-skills same-as` alias whose referenced `consumer` block does not exist
 - a `provider.instructions.<target>` `same-as` alias combined with a positional argument, another property, or a source reference block
 - a `provider.instructions.<target>` `same-as` alias whose referenced instruction is undeclared

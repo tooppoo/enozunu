@@ -23,7 +23,7 @@ Enozunu is not an interactive resource manager, marketplace, or installer for AI
 - It does not search for, recommend, or provide marketplace discovery of Skills or agents.
 - It does not provide a GUI or an interactive install flow.
 
-Its responsibility is to resolve the sources declared in `enozunu.kdl`, lock the resolved revisions in `enozunu.lock.json`, materialize them into target AI-native paths, and let later runs verify against the lock.
+Its responsibility is limited to the resolve, lock, materialize, and verify flow described in the [Overview](#overview), applied to what `enozunu.kdl` declares.
 The responsibility boundary is declarativeness, reproducibility, and generated-output management — not how many kinds of artifacts can be installed or how they are discovered.
 
 ## Quick Start
@@ -51,7 +51,7 @@ curl -fsSL https://raw.githubusercontent.com/tooppoo/enozunu/refs/heads/main/ins
 
 Enozunu manages where AI-agent configuration comes from and where it is materialized. You declare sources once in `enozunu.kdl`, and Enozunu resolves them and writes them into each target AI's native paths.
 
-Every run follows the same flow: resolve the declared sources, lock the resolved commits in `enozunu.lock.json`, materialize them into target paths, and verify later runs against the lock (`enozunu summon --frozen` in CI).
+Each run resolves the declared sources, records the resolved commits of mutable selections in `enozunu.lock.json`, and materializes them into target paths. CI verifies the result with `enozunu summon --frozen`, which materializes strictly from the lock and fails when the lock does not cover a mutable source.
 
 The supported target AIs are Claude and Codex. Both select from the same source pool, and each selection is materialized into that target's native path. For the exact placement of each artifact, see [the supported targets guide](docs/guide/support.md).
 

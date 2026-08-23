@@ -319,14 +319,21 @@ fn parse_same_as_ref(raw: &str) -> Option<SameAsRef> {
     }
 }
 
-/// One `provider.instructions.<target>` declaration before `same-as` alias resolution.
+/// One `provider.instructions.<target>` declaration before cross-target reference resolution.
 ///
-/// A `same-as` alias resolves against sibling declarations only after every target is parsed, so parsing records the unresolved reference and resolution replaces it with the referenced declaration's own `SourceReference`.
-/// The alias never becomes its own source identity: only the reused source reference crosses into the resolved `InstructionsDecl`, so the aliasing target keeps its own provenance and target path.
-/// A declaration that failed to parse is kept as `Invalid` rather than dropped, so an alias to a malformed target does not misreport it as undeclared and repeats no error the failed declaration already produced.
+/// A `use-same-instruction` reference or `same-as` alias resolves against sibling declarations only after every target is parsed, so parsing records the unresolved reference and resolution replaces it with the referenced target's effective `SourceReference`.
+/// The reference never becomes its own source identity: only the reused source reference crosses into the resolved `InstructionsDecl`, so the referencing target keeps its own provenance and target path.
+/// A declaration that failed to parse is kept as `Invalid` rather than dropped, so a reference to a malformed target does not misreport it as undeclared and repeats no error the failed declaration already produced.
 enum InstructionDeclParsed {
     Normal(SourceReference),
-    Alias { referenced: TargetAi },
+    /// The legacy `same-as` alias (issue #53): resolves like `UseSame`, but must not reference another alias.
+    Alias {
+        referenced: TargetAi,
+    },
+    /// A `use-same-instruction "<target>"` reference (issue #60): reuses the referenced target's effective source.
+    UseSame {
+        referenced: TargetAi,
+    },
     Invalid,
 }
 
@@ -396,9 +403,11 @@ fn parse_instructions(node: &KdlNode, diags: &mut Vec<Diagnostic>) -> Instructio
                 ));
                 continue;
             }
-            // A `same-as` property marks the alias form; its absence keeps the normal one-source-reference-block declaration unchanged from issue #38.
+            // A `same-as` property marks the legacy alias form and a `use-same-instruction` child the issue #60 reference form; without either, the normal one-source-reference-block declaration is unchanged from issue #38.
             let declaration = if child.get("same-as").is_some() {
                 parse_instruction_alias(child, target, target_ai, diags)
+            } else if has_use_same_instruction(child) {
+                parse_instruction_use_same(child, target, target_ai, diags)
             } else {
                 parse_source_reference(child, "instruction", target, diags)
                     .map(InstructionDeclParsed::Normal)
@@ -491,55 +500,175 @@ fn parse_instruction_alias(
     Some(InstructionDeclParsed::Alias { referenced })
 }
 
+fn has_use_same_instruction(node: &KdlNode) -> bool {
+    node.children().is_some_and(|c| {
+        c.nodes()
+            .iter()
+            .any(|n| n.name().value() == "use-same-instruction")
+    })
+}
+
+/// Parses the `use-same-instruction` form of a `provider.instructions.<target>` declaration (issue #60).
+///
+/// An instruction source is singular, so the reference is the whole declaration: exactly one `use-same-instruction` node and no source reference block may share the target, because combining them would mean choosing between two sources for one value.
+fn parse_instruction_use_same(
+    node: &KdlNode,
+    target: &str,
+    target_ai: TargetAi,
+    diags: &mut Vec<Diagnostic>,
+) -> Option<InstructionDeclParsed> {
+    let children = node
+        .children()
+        .expect("the caller found a `use-same-instruction` child");
+    let (use_same_nodes, other_nodes): (Vec<_>, Vec<_>) = children
+        .nodes()
+        .iter()
+        .partition(|n| n.name().value() == "use-same-instruction");
+
+    if !other_nodes.is_empty() {
+        diags.push(Diagnostic::new(
+            DiagnosticCode::ManifestShape,
+            format!(
+                "`provider.instructions.{target}` must not combine `use-same-instruction` with a source reference block; an instruction source is exactly one of a source reference block, `use-same-instruction`, or `same-as`"
+            ),
+        ));
+        return None;
+    }
+
+    let [use_same] = use_same_nodes.as_slice() else {
+        diags.push(Diagnostic::new(
+            DiagnosticCode::ManifestShape,
+            format!(
+                "`provider.instructions.{target}` declares {} `use-same-instruction` nodes; at most one is allowed",
+                use_same_nodes.len()
+            ),
+        ));
+        return None;
+    };
+
+    parse_use_same(
+        use_same,
+        "use-same-instruction",
+        &format!("provider.instructions.{target}"),
+        target_ai,
+        diags,
+    )
+    .map(|referenced| InstructionDeclParsed::UseSame { referenced })
+}
+
 /// Resolves parsed instruction declarations into the domain `InstructionsDecl`.
 ///
-/// A normal declaration keeps its own source. An alias reuses the referenced target's source reference, which must be a normal declaration: a reference to an undeclared target or to another alias is rejected, because issue #53 supports no alias chains.
+/// A normal declaration keeps its own source. A `use-same-instruction` reference or legacy `same-as` alias reuses the referenced target's *effective* source, resolved after the whole block is parsed so sibling order does not matter. A reference to an undeclared target is rejected; an alias to another alias stays rejected per issue #53, while a reference chain through `use-same-instruction` is followed and only a cycle is rejected.
 fn resolve_instructions(
     parsed: &InstructionsParsed,
     diags: &mut Vec<Diagnostic>,
 ) -> InstructionsDecl {
+    let mut resolver = InstructionResolver {
+        states: [SequenceState::Pending, SequenceState::Pending],
+    };
     InstructionsDecl {
-        claude: resolve_instruction_slot(TargetAi::Claude, parsed, diags),
-        codex: resolve_instruction_slot(TargetAi::Codex, parsed, diags),
+        claude: resolver.effective(TargetAi::Claude, parsed, diags),
+        codex: resolver.effective(TargetAi::Codex, parsed, diags),
     }
 }
 
-fn resolve_instruction_slot(
-    ai: TargetAi,
-    parsed: &InstructionsParsed,
-    diags: &mut Vec<Diagnostic>,
-) -> Option<SourceReference> {
-    match parsed.get(ai)? {
-        InstructionDeclParsed::Normal(reference) => Some(reference.clone()),
-        // A declaration that failed to parse already reported its own error; it resolves to no source without a second one.
-        InstructionDeclParsed::Invalid => None,
-        InstructionDeclParsed::Alias { referenced } => match parsed.get(*referenced) {
+/// Resolves each target's effective instruction source, memoized so every slot is computed once and a cycle is reported once.
+struct InstructionResolver {
+    states: [SequenceState<Option<SourceReference>>; 2],
+}
+
+impl InstructionResolver {
+    fn effective(
+        &mut self,
+        ai: TargetAi,
+        parsed: &InstructionsParsed,
+        diags: &mut Vec<Diagnostic>,
+    ) -> Option<SourceReference> {
+        match &self.states[state_index(ai)] {
+            SequenceState::Done(reference) => return reference.clone(),
+            // Cycles are detected at the referencing declaration before recursing, so resolution never re-enters an in-progress slot.
+            SequenceState::InProgress => unreachable!("cycle detected before recursion"),
+            SequenceState::Pending => {}
+        }
+        self.states[state_index(ai)] = SequenceState::InProgress;
+
+        let reference = match parsed.get(ai) {
+            None => None,
             Some(InstructionDeclParsed::Normal(reference)) => Some(reference.clone()),
-            // The referent failed to parse, so its own error stands; the alias adds no misleading "not declared" report.
+            // A declaration that failed to parse already reported its own error; it resolves to no source without a second one.
             Some(InstructionDeclParsed::Invalid) => None,
-            Some(InstructionDeclParsed::Alias { .. }) => {
-                diags.push(Diagnostic::new(
-                    DiagnosticCode::ManifestShape,
-                    format!(
-                        "`provider.instructions.{}` `same-as` references `provider.instructions.{}`, which is itself a `same-as` alias; alias chains are not supported",
-                        ai.as_str(),
-                        referenced.as_str()
-                    ),
-                ));
-                None
+            Some(InstructionDeclParsed::Alias { referenced }) => {
+                self.reused(ai, *referenced, true, parsed, diags)
             }
-            None => {
-                diags.push(Diagnostic::new(
-                    DiagnosticCode::ManifestShape,
-                    format!(
-                        "`provider.instructions.{}` `same-as` references `provider.instructions.{}`, which is not declared",
-                        ai.as_str(),
-                        referenced.as_str()
-                    ),
-                ));
-                None
+            Some(InstructionDeclParsed::UseSame { referenced }) => {
+                self.reused(ai, *referenced, false, parsed, diags)
             }
-        },
+        };
+
+        self.states[state_index(ai)] = SequenceState::Done(reference.clone());
+        reference
+    }
+
+    /// The referenced target's effective source, or `None` with a diagnostic when the reference is invalid.
+    fn reused(
+        &mut self,
+        ai: TargetAi,
+        referenced: TargetAi,
+        legacy_alias: bool,
+        parsed: &InstructionsParsed,
+        diags: &mut Vec<Diagnostic>,
+    ) -> Option<SourceReference> {
+        let Some(referenced_decl) = parsed.get(referenced) else {
+            let message = if legacy_alias {
+                format!(
+                    "`provider.instructions.{}` `same-as` references `provider.instructions.{}`, which is not declared",
+                    ai.as_str(),
+                    referenced.as_str()
+                )
+            } else {
+                format!(
+                    "`provider.instructions.{}` `use-same-instruction` references `provider.instructions.{}`, which is not declared",
+                    ai.as_str(),
+                    referenced.as_str()
+                )
+            };
+            diags.push(Diagnostic::new(DiagnosticCode::ManifestShape, message));
+            return None;
+        };
+
+        if legacy_alias && matches!(referenced_decl, InstructionDeclParsed::Alias { .. }) {
+            diags.push(Diagnostic::new(
+                DiagnosticCode::ManifestShape,
+                format!(
+                    "`provider.instructions.{}` `same-as` references `provider.instructions.{}`, which is itself a `same-as` alias; alias chains are not supported",
+                    ai.as_str(),
+                    referenced.as_str()
+                ),
+            ));
+            return None;
+        }
+
+        if matches!(
+            self.states[state_index(referenced)],
+            SequenceState::InProgress
+        ) {
+            let node = if legacy_alias {
+                "`same-as`"
+            } else {
+                "`use-same-instruction`"
+            };
+            diags.push(Diagnostic::new(
+                DiagnosticCode::ManifestShape,
+                format!(
+                    "`provider.instructions.{}` {node} reference to `provider.instructions.{}` forms a reference cycle",
+                    ai.as_str(),
+                    referenced.as_str()
+                ),
+            ));
+            return None;
+        }
+
+        self.effective(referenced, parsed, diags)
     }
 }
 
@@ -1189,9 +1318,13 @@ fn parse_target_consumer(
                 }
                 "use-same-skills" => {
                     other_skill_nodes += 1;
-                    if let Some(referenced) =
-                        parse_use_same(child, "use-same-skills", target, target_ai, diags)
-                    {
+                    if let Some(referenced) = parse_use_same(
+                        child,
+                        "use-same-skills",
+                        &format!("consumer.{target}"),
+                        target_ai,
+                        diags,
+                    ) {
                         skill_items.push(ConsumerItem::UseSame(referenced));
                     }
                 }
@@ -1199,9 +1332,13 @@ fn parse_target_consumer(
                     agent_items.push(ConsumerItem::Local(string_args(child, "use-agents", diags)));
                 }
                 "use-same-agents" => {
-                    if let Some(referenced) =
-                        parse_use_same(child, "use-same-agents", target, target_ai, diags)
-                    {
+                    if let Some(referenced) = parse_use_same(
+                        child,
+                        "use-same-agents",
+                        &format!("consumer.{target}"),
+                        target_ai,
+                        diags,
+                    ) {
                         agent_items.push(ConsumerItem::UseSame(referenced));
                     }
                 }
@@ -1242,14 +1379,15 @@ fn parse_target_consumer(
     }
 }
 
-/// Parses a `use-same-skills` / `use-same-agents` node (issue #60).
+/// Parses a `use-same-skills` / `use-same-agents` / `use-same-instruction` node (issue #60).
 ///
 /// The node carries exactly one positional string argument naming the referenced target, and nothing else: no properties, no children.
 /// A self-reference is rejected here with a direct message; a transitive cycle through the other target is only detectable during resolution and is rejected there.
+/// `context` is the declaring manifest path (`consumer.<target>` or `provider.instructions.<target>`), used verbatim in diagnostics.
 fn parse_use_same(
     node: &KdlNode,
     node_name: &str,
-    target: &str,
+    context: &str,
     target_ai: TargetAi,
     diags: &mut Vec<Diagnostic>,
 ) -> Option<TargetAi> {
@@ -1257,7 +1395,7 @@ fn parse_use_same(
     let fail = |diags: &mut Vec<Diagnostic>, detail: &str| {
         diags.push(Diagnostic::new(
             DiagnosticCode::ManifestShape,
-            format!("`{node_name}` under `consumer.{target}` {detail}"),
+            format!("`{node_name}` under `{context}` {detail}"),
         ));
     };
 
@@ -1438,11 +1576,12 @@ struct SequenceLabels {
     logical: &'static str,
 }
 
+/// Resolution state of one target's slot in a cross-target reference walk.
 enum SequenceState<T> {
     Pending,
-    /// The sequence is on the current resolution path; reaching it again means a reference cycle.
+    /// The slot is on the current resolution path; reaching it again means a reference cycle.
     InProgress,
-    Done(Vec<T>),
+    Done(T),
 }
 
 /// Resolves one logical repeatable value (`use-skills` or `use-agents`) across targets.
@@ -1452,7 +1591,7 @@ enum SequenceState<T> {
 struct SequenceResolver<T, F> {
     get: F,
     labels: SequenceLabels,
-    states: [SequenceState<T>; 2],
+    states: [SequenceState<Vec<T>>; 2],
 }
 
 fn state_index(ai: TargetAi) -> usize {
@@ -3098,6 +3237,180 @@ enozunu config-version=1 {
 }
 "#;
         assert!(parse(text).is_ok());
+    }
+
+    #[test]
+    fn resolves_use_same_instruction_to_the_referenced_source() {
+        let text = manifest_with_instructions(
+            r#"      claude { git { url "https://example.com/r"; branch "main"; path "instructions/base.md" } }
+      codex {
+        use-same-instruction "claude"
+      }"#,
+            "",
+        );
+        let manifest = parse(&text).unwrap();
+        // The referencing target reuses the referenced declaration's source reference itself, not a copy re-derived from its own context.
+        assert_eq!(
+            manifest.provider.instructions.get(TargetAi::Codex),
+            manifest.provider.instructions.get(TargetAi::Claude)
+        );
+        assert!(
+            manifest
+                .provider
+                .instructions
+                .get(TargetAi::Codex)
+                .is_some()
+        );
+    }
+
+    #[test]
+    fn resolves_use_same_instruction_declared_before_its_referent() {
+        let text = manifest_with_instructions(
+            r#"      claude {
+        use-same-instruction "codex"
+      }
+      codex { local { path "AGENTS.base.md" } }"#,
+            "",
+        );
+        let manifest = parse(&text).unwrap();
+        assert_eq!(
+            manifest.provider.instructions.get(TargetAi::Claude),
+            Some(&SourceReference::Local {
+                path: "AGENTS.base.md".to_owned()
+            })
+        );
+    }
+
+    #[test]
+    fn rejects_use_same_instruction_referencing_an_undeclared_target() {
+        // Diagnostic wording is pinned by e2e/validate_use_same.repor; unit tests assert the code only.
+        let text = manifest_with_instructions(
+            r#"      codex {
+        use-same-instruction "claude"
+      }"#,
+            "",
+        );
+        assert_eq!(codes(parse(&text)), [DiagnosticCode::ManifestShape]);
+    }
+
+    #[test]
+    fn rejects_a_self_referential_use_same_instruction() {
+        let text = manifest_with_instructions(
+            r#"      claude {
+        use-same-instruction "claude"
+      }"#,
+            "",
+        );
+        assert_eq!(codes(parse(&text)), [DiagnosticCode::ManifestShape]);
+    }
+
+    #[test]
+    fn rejects_a_use_same_instruction_reference_cycle() {
+        let text = manifest_with_instructions(
+            r#"      claude {
+        use-same-instruction "codex"
+      }
+      codex {
+        use-same-instruction "claude"
+      }"#,
+            "",
+        );
+        // Memoization reports the cycle once, so the manifest yields exactly one diagnostic.
+        assert_eq!(codes(parse(&text)), [DiagnosticCode::ManifestShape]);
+    }
+
+    #[test]
+    fn rejects_a_cycle_between_a_legacy_instruction_alias_and_use_same_instruction() {
+        // The legacy alias and the new reference resolve through the same walk, so a mixed cycle is detected like a pure `use-same-instruction` cycle.
+        let text = manifest_with_instructions(
+            r#"      claude same-as="provider.instructions.codex"
+      codex {
+        use-same-instruction "claude"
+      }"#,
+            "",
+        );
+        assert_eq!(codes(parse(&text)), [DiagnosticCode::ManifestShape]);
+    }
+
+    #[test]
+    fn rejects_multiple_use_same_instruction_nodes() {
+        let text = manifest_with_instructions(
+            r#"      claude { local { path "CLAUDE.base.md" } }
+      codex {
+        use-same-instruction "claude"
+        use-same-instruction "claude"
+      }"#,
+            "",
+        );
+        assert_eq!(codes(parse(&text)), [DiagnosticCode::ManifestShape]);
+    }
+
+    #[test]
+    fn rejects_combining_use_same_instruction_with_a_source_reference_block() {
+        let text = manifest_with_instructions(
+            r#"      claude { local { path "CLAUDE.base.md" } }
+      codex {
+        use-same-instruction "claude"
+        local { path "AGENTS.base.md" }
+      }"#,
+            "",
+        );
+        assert_eq!(codes(parse(&text)), [DiagnosticCode::ManifestShape]);
+    }
+
+    #[test]
+    fn rejects_use_same_instruction_shape_violations() {
+        for body in [
+            r#"      codex {
+        use-same-instruction
+      }"#,
+            r#"      codex {
+        use-same-instruction "claude" "claude"
+      }"#,
+            r#"      codex {
+        use-same-instruction 5
+      }"#,
+            r#"      codex {
+        use-same-instruction target="claude"
+      }"#,
+            r#"      codex {
+        use-same-instruction "claude" {
+          local { path "AGENTS.base.md" }
+        }
+      }"#,
+            r#"      codex {
+        use-same-instruction "gemini"
+      }"#,
+        ] {
+            let text = manifest_with_instructions(
+                &format!("      claude {{ local {{ path \"CLAUDE.base.md\" }} }}\n{body}"),
+                "",
+            );
+            let codes = codes(parse(&text));
+            assert!(
+                codes.contains(&DiagnosticCode::ManifestShape),
+                "`{body}` must be rejected: {codes:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_use_same_instruction_to_a_malformed_referent_adds_no_second_error() {
+        // The referenced declaration's own parse failure is the only diagnostic; the reference resolves to no source without a misleading "not declared" report.
+        let text = manifest_with_instructions(
+            r#"      claude { bogus {} }
+      codex {
+        use-same-instruction "claude"
+      }"#,
+            "",
+        );
+        let diags = parse(&text).unwrap_err();
+        assert!(
+            diags
+                .iter()
+                .all(|d| !d.message.contains("use-same-instruction")),
+            "{diags:?}"
+        );
     }
 
     /// Wraps `consumer.claude` and `consumer.codex` bodies in a manifest declaring skills `a` / `b`, agent `x`, and both instruction sources, so `use-skills` alias tests exercise both targets against one provider pool without tripping reference or `when` validation.

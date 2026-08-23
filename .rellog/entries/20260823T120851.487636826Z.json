@@ -1,0 +1,10 @@
+{
+  "kind": "added",
+  "targets": [
+    "cli"
+  ],
+  "links": [
+    "https://github.com/tooppoo/enozunu/issues/60"
+  ],
+  "body": "use-same-instruction reuses another target's effective instruction source; an instruction source is exactly one of a direct source block, use-same-instruction, or legacy same-as"
+}

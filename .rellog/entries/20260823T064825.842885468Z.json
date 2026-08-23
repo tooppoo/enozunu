@@ -1,0 +1,10 @@
+{
+  "kind": "added",
+  "targets": [
+    "cli"
+  ],
+  "links": [
+    "https://github.com/tooppoo/enozunu/issues/60"
+  ],
+  "body": "use-same-skills / use-same-agents nodes additively reuse another target's effective use-skills / use-agents sequence at the declaration position, with cycle and absent-target validation"
+}

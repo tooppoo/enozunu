@@ -127,6 +127,25 @@ mod tests {
     }
 
     #[test]
+    fn renders_every_duplicate_selection_of_one_skill_in_declaration_order() {
+        // A skill selected twice is two declarations, not one merged declaration (issue #60): each keeps its own rule, in manifest order, even though the artifact materializes once.
+        let out = render(
+            b"base",
+            &[
+                usage("review", &["before completion"]),
+                usage("test", &[]),
+                usage("review", &["after implementation"]),
+            ],
+        )
+        .unwrap();
+        assert!(out.contains(
+            "- When before completion, always use the `review` skill.\n\
+             - Always use the `test` skill.\n\
+             - When after implementation, always use the `review` skill.\n"
+        ));
+    }
+
+    #[test]
     fn omits_the_skill_usage_section_when_no_skill_is_selected() {
         let out = render(b"base only\n", &[]).unwrap();
         assert_eq!(

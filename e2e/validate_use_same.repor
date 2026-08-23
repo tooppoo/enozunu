@@ -1,0 +1,134 @@
+# E2E: `enozunu validate` reports `use-same-skills` / `use-same-agents` misuse.
+#
+# These cases pin the user-visible diagnostic wording for the reference and
+# shape rules of `use-same-*` (issue #60); the unit tests assert only the
+# diagnostic codes and resolved model. Happy-path materialization through
+# `enozunu summon` is covered by the summon scenarios.
+
+case "validate rejects use-same-skills referencing an undeclared consumer" {
+  write <"enozunu.kdl"> ```
+    enozunu config-version=1 {
+      consumer {
+        codex {
+          use-same-skills "claude"
+        }
+      }
+    }
+    ```
+  $ enozunu validate
+  assert {
+    exit 1
+    # Pin the referencing node and the referenced consumer target, so the
+    # case cannot pass on the legacy same-as diagnostic or an unrelated
+    # "is not declared" message.
+    stderr contains "`use-same-skills` references `consumer.claude`, but `consumer.claude` is not declared"
+  }
+}
+
+case "validate rejects a self-referential use-same-skills" {
+  write <"enozunu.kdl"> ```
+    enozunu config-version=1 {
+      consumer {
+        claude {
+          use-same-skills "claude"
+        }
+      }
+    }
+    ```
+  $ enozunu validate
+  assert {
+    exit 1
+    stderr contains "`use-same-skills` under `consumer.claude` must not reference itself"
+  }
+}
+
+case "validate rejects a use-same-skills reference cycle" {
+  write <"enozunu.kdl"> ```
+    enozunu config-version=1 {
+      consumer {
+        claude {
+          use-same-skills "codex"
+        }
+        codex {
+          use-same-skills "claude"
+        }
+      }
+    }
+    ```
+  $ enozunu validate
+  assert {
+    exit 1
+    stderr contains "forms a reference cycle"
+  }
+}
+
+case "validate rejects use-same-skills naming an unsupported target" {
+  write <"enozunu.kdl"> ```
+    enozunu config-version=1 {
+      consumer {
+        claude {
+          use-same-skills "gemini"
+        }
+      }
+    }
+    ```
+  $ enozunu validate
+  assert {
+    exit 1
+    stderr contains "references unsupported target `gemini`"
+  }
+}
+
+case "validate rejects a use-same-skills node with a malformed shape" {
+  write <"enozunu.kdl"> ```
+    enozunu config-version=1 {
+      consumer {
+        claude {
+          use-same-skills "claude" "codex"
+        }
+      }
+    }
+    ```
+  $ enozunu validate
+  assert {
+    exit 1
+    stderr contains "`use-same-skills` under `consumer.claude` must have exactly one target argument"
+  }
+}
+
+case "validate rejects use-same-agents referencing an undeclared consumer" {
+  write <"enozunu.kdl"> ```
+    enozunu config-version=1 {
+      consumer {
+        codex {
+          use-same-agents "claude"
+        }
+      }
+    }
+    ```
+  $ enozunu validate
+  assert {
+    exit 1
+    stderr contains "`use-same-agents` references `consumer.claude`, but `consumer.claude` is not declared"
+  }
+}
+
+case "validate rejects a use-same-agents reference cycle" {
+  write <"enozunu.kdl"> ```
+    enozunu config-version=1 {
+      consumer {
+        claude {
+          use-same-agents "codex"
+        }
+        codex {
+          use-same-agents "claude"
+        }
+      }
+    }
+    ```
+  $ enozunu validate
+  assert {
+    exit 1
+    stderr contains "forms a reference cycle"
+  }
+}

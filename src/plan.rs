@@ -82,14 +82,17 @@ fn normalize_writes(
     selected: Vec<PlannedMaterialization>,
 ) -> Result<Vec<PlannedMaterialization>, Vec<Diagnostic>> {
     let mut planned: Vec<PlannedMaterialization> = Vec::new();
+    // Maps each target path to its first entry's index in `planned`, so repeats compare against the first occurrence without rescanning it.
+    let mut first_by_path: std::collections::HashMap<String, usize> =
+        std::collections::HashMap::new();
     let mut diags = Vec::new();
     for entry in selected {
-        match planned
-            .iter()
-            .find(|p| p.target_rel_path == entry.target_rel_path)
-        {
-            None => planned.push(entry),
-            Some(first) if *first == entry => {}
+        match first_by_path.get(&entry.target_rel_path) {
+            None => {
+                first_by_path.insert(entry.target_rel_path.clone(), planned.len());
+                planned.push(entry);
+            }
+            Some(&first) if planned[first] == entry => {}
             Some(_) => diags.push(Diagnostic::new(
                 DiagnosticCode::DuplicateTargetPath,
                 format!(

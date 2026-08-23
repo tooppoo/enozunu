@@ -3471,24 +3471,14 @@ enozunu config-version=1 {
   }
 }
 "#;
-        let messages = messages(parse(text));
-        assert!(
-            messages.iter().any(|m| m.contains(
-                "`consumer.codex` `use-same-skills` references `consumer.claude`, but `consumer.claude` is not declared"
-            )),
-            "{messages:?}"
-        );
+        // Unit tests assert only the diagnostic code; the user-visible wording of each `use-same-*` diagnostic is pinned by e2e/validate_use_same.repor.
+        assert_eq!(codes(parse(text)), [DiagnosticCode::ManifestShape]);
     }
 
     #[test]
     fn rejects_a_self_referential_use_same_skills() {
         let text = consumer_targets(r#"      use-same-skills "claude""#, "");
-        let messages = messages(parse(&text));
-        assert!(
-            messages.iter().any(|m| m
-                .contains("`use-same-skills` under `consumer.claude` must not reference itself")),
-            "{messages:?}"
-        );
+        assert_eq!(codes(parse(&text)), [DiagnosticCode::ManifestShape]);
     }
 
     #[test]
@@ -3497,13 +3487,8 @@ enozunu config-version=1 {
             r#"      use-same-skills "codex""#,
             r#"      use-same-skills "claude""#,
         );
-        let messages = messages(parse(&text));
-        assert!(
-            messages
-                .iter()
-                .any(|m| m.contains("forms a reference cycle")),
-            "{messages:?}"
-        );
+        // Memoization reports the cycle once, so the manifest yields exactly one diagnostic.
+        assert_eq!(codes(parse(&text)), [DiagnosticCode::ManifestShape]);
     }
 
     #[test]
@@ -3513,50 +3498,26 @@ enozunu config-version=1 {
             r#"      use-skills same-as="consumer.codex.use-skills""#,
             r#"      use-same-skills "claude""#,
         );
-        let messages = messages(parse(&text));
-        assert!(
-            messages
-                .iter()
-                .any(|m| m.contains("forms a reference cycle")),
-            "{messages:?}"
-        );
+        assert_eq!(codes(parse(&text)), [DiagnosticCode::ManifestShape]);
     }
 
     #[test]
     fn rejects_use_same_skills_shape_violations() {
-        for (body, expected) in [
-            (
-                r#"      use-same-skills"#,
-                "must have exactly one target argument",
-            ),
-            (
-                r#"      use-same-skills "claude" "claude""#,
-                "must have exactly one target argument",
-            ),
-            (
-                r#"      use-same-skills 5"#,
-                "must have a string target argument",
-            ),
-            (
-                r#"      use-same-skills target="claude""#,
-                "must not declare properties",
-            ),
-            (
-                r#"      use-same-skills "claude" {
+        for body in [
+            r#"      use-same-skills"#,
+            r#"      use-same-skills "claude" "claude""#,
+            r#"      use-same-skills 5"#,
+            r#"      use-same-skills target="claude""#,
+            r#"      use-same-skills "claude" {
         when "reviewing code"
       }"#,
-                "must not have a child block",
-            ),
-            (
-                r#"      use-same-skills "gemini""#,
-                "references unsupported target `gemini`",
-            ),
+            r#"      use-same-skills "gemini""#,
         ] {
             let text = consumer_targets(r#"      use-skills "a""#, body);
-            let messages = messages(parse(&text));
+            let codes = codes(parse(&text));
             assert!(
-                messages.iter().any(|m| m.contains(expected)),
-                "expected `{expected}` for `{body}`: {messages:?}"
+                codes.contains(&DiagnosticCode::ManifestShape),
+                "`{body}` must be rejected: {codes:?}"
             );
         }
     }
@@ -3568,11 +3529,7 @@ enozunu config-version=1 {
             r#"      use-skills same-as="consumer.claude.use-skills"
       use-same-skills "claude""#,
         );
-        let messages = messages(parse(&text));
-        assert!(
-            messages.iter().any(|m| m.contains("must not combine")),
-            "{messages:?}"
-        );
+        assert_eq!(codes(parse(&text)), [DiagnosticCode::ManifestShape]);
     }
 
     #[test]
@@ -3681,24 +3638,13 @@ enozunu config-version=1 {
   }
 }
 "#;
-        let messages = messages(parse(text));
-        assert!(
-            messages.iter().any(|m| m.contains(
-                "`consumer.codex` `use-same-agents` references `consumer.claude`, but `consumer.claude` is not declared"
-            )),
-            "{messages:?}"
-        );
+        assert_eq!(codes(parse(text)), [DiagnosticCode::ManifestShape]);
     }
 
     #[test]
     fn rejects_a_self_referential_use_same_agents() {
         let text = consumer_targets(r#"      use-same-agents "claude""#, "");
-        let messages = messages(parse(&text));
-        assert!(
-            messages.iter().any(|m| m
-                .contains("`use-same-agents` under `consumer.claude` must not reference itself")),
-            "{messages:?}"
-        );
+        assert_eq!(codes(parse(&text)), [DiagnosticCode::ManifestShape]);
     }
 
     #[test]
@@ -3707,34 +3653,19 @@ enozunu config-version=1 {
             r#"      use-same-agents "codex""#,
             r#"      use-same-agents "claude""#,
         );
-        let messages = messages(parse(&text));
-        assert!(
-            messages
-                .iter()
-                .any(|m| m.contains("forms a reference cycle")),
-            "{messages:?}"
-        );
+        assert_eq!(codes(parse(&text)), [DiagnosticCode::ManifestShape]);
     }
 
     #[test]
     fn a_use_same_skills_cycle_does_not_reject_use_same_agents() {
-        // Cycle detection runs per logical value: the skills cycle is an error, but claude's valid agents expansion still resolves.
+        // Cycle detection runs per logical value: the skills cycle is the single diagnostic, while claude's valid agents expansion resolves without one.
         let text = consumer_targets(
             r#"      use-same-skills "codex"
       use-same-agents "codex""#,
             r#"      use-same-skills "claude"
       use-agents "x""#,
         );
-        let diags = parse(&text).unwrap_err();
-        let cycle_count = diags
-            .iter()
-            .filter(|d| d.message.contains("forms a reference cycle"))
-            .count();
-        assert_eq!(cycle_count, 1, "{diags:?}");
-        assert!(
-            diags.iter().all(|d| !d.message.contains("use-same-agents")),
-            "{diags:?}"
-        );
+        assert_eq!(codes(parse(&text)), [DiagnosticCode::ManifestShape]);
     }
 
     #[test]

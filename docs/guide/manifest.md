@@ -359,7 +359,9 @@ use-skills "git-kura"
 use-skills "semantic-line-breaks"
 ```
 
-Selecting the same name twice within one target is rejected, whether the repetition appears inside one node or across nodes, because both selections materialize to the same target path.
+Selecting the same name more than once within one target is a valid declaration, whether the repetition appears inside one node or across nodes.
+Every selection stays in the effective declaration list — including each selection's own `when` rules, which all reach the generated root instructions — but the selected artifact materializes only once per target, because every selection of one source resolves to the identical artifact.
+This normalization applies only to repeated selections of the same source; distinct sources materializing to the same target path remain rejected.
 
 ### Skills
 
@@ -574,7 +576,7 @@ git { url + exactly one of (branch, tag, revision) + path }
 v0.0.x should reject:
 
 - duplicate source names within the same kind
-- multiple selections resolving to the same target path, including the same name selected twice within one target
+- distinct sources resolving to the same target path (repeated selections of the same source normalize to one write instead)
 - `use-skills` references that do not exist under `provider.skills`
 - `use-agents` references that do not exist under `provider.agents`
 - source declarations without exactly one source reference block

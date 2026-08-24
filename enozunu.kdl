@@ -73,7 +73,9 @@ enozunu config-version=1 {
           path "instructions/base.md"
         }
       }
-      codex same-as="provider.instructions.claude"
+      codex {
+        use-same-instruction "claude"
+      }
     }
 
     // agents {
@@ -114,7 +116,7 @@ enozunu config-version=1 {
       }
     }
     codex {
-      use-skills same-as="consumer.claude.use-skills"
+      use-same-skills "claude"
     }
   }
 }

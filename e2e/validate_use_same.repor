@@ -27,6 +27,32 @@ case "validate rejects the removed use-skills same-as alias with a migration hin
   }
 }
 
+case "validate rejects the removed instruction same-as alias with a migration hint" {
+  write <"base.md"> ```
+    # Base
+    ```
+  write <"enozunu.kdl"> ```
+    enozunu config-version=1 {
+      provider {
+        instructions {
+          claude { local { path "base.md" } }
+          codex same-as="provider.instructions.claude"
+        }
+      }
+      consumer {
+        codex {}
+      }
+    }
+    ```
+  $ enozunu validate
+  assert {
+    exit 1
+    # The removed issue #53 alias must fail with the migration target, not a
+    # generic shape error, so released manifests get an actionable message.
+    stderr contains "`provider.instructions.codex` `same-as` is no longer supported; declare `use-same-instruction \"<target>\"` inside the target block instead"
+  }
+}
+
 case "validate rejects use-same-skills referencing an undeclared consumer" {
   write <"enozunu.kdl"> ```
     enozunu config-version=1 {

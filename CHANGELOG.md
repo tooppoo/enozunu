@@ -1,5 +1,29 @@
 # CHANGELOG
 
+## 0.6.0
+
+### changed
+
+#### cli
+
+<!-- rellog:entry:start -->
+<!-- rellog:body:start -->
+BREAKING: the use-skills same-as alias is no longer accepted; declare use-same-skills "<target>" instead (use-skills same-as="consumer.<t>.use-skills" becomes use-same-skills "<t>")
+<!-- rellog:body:end -->
+
+Refs:
+- https://github.com/tooppoo/enozunu/issues/68
+<!-- rellog:entry:end -->
+
+<!-- rellog:entry:start -->
+<!-- rellog:body:start -->
+BREAKING: the instruction same-as alias is no longer accepted; declare use-same-instruction "<target>" inside the target block instead (codex same-as="provider.instructions.claude" becomes codex { use-same-instruction "claude" })
+<!-- rellog:body:end -->
+
+Refs:
+- https://github.com/tooppoo/enozunu/issues/68
+<!-- rellog:entry:end -->
+
 ## 0.5.0
 
 ### changed

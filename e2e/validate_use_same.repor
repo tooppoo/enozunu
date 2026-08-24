@@ -2,9 +2,30 @@
 # `use-same-instruction` misuse.
 #
 # These cases pin the user-visible diagnostic wording for the reference and
-# shape rules of `use-same-*` (issue #60); the unit tests assert only the
-# diagnostic codes and resolved model. Happy-path materialization through
-# `enozunu summon` is covered by the summon scenarios.
+# shape rules of `use-same-*` (issue #60) and for the removed legacy `same-as`
+# forms (issue #68); the unit tests assert only the diagnostic codes and
+# resolved model. Happy-path materialization through `enozunu summon` is
+# covered by the summon scenarios.
+
+case "validate rejects the removed use-skills same-as alias with a migration hint" {
+  write <"enozunu.kdl"> ```
+    enozunu config-version=1 {
+      consumer {
+        claude {
+          use-skills same-as="consumer.codex.use-skills"
+        }
+        codex {}
+      }
+    }
+    ```
+  $ enozunu validate
+  assert {
+    exit 1
+    # The removed issue #53 alias must fail with the migration target, not a
+    # generic shape error, so released manifests get an actionable message.
+    stderr contains "`use-skills same-as` under `consumer.claude` is no longer supported; use `use-same-skills \"<target>\"` instead"
+  }
+}
 
 case "validate rejects use-same-skills referencing an undeclared consumer" {
   write <"enozunu.kdl"> ```

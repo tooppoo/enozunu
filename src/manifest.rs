@@ -298,23 +298,13 @@ fn parse_provider(node: &KdlNode, diags: &mut Vec<Diagnostic>) -> Provider {
     }
 }
 
-/// A `same-as` reference to another manifest logical value.
+/// Resolves a legacy instruction `same-as` reference string, returning `None` for any path outside the supported set.
 ///
-/// Issue #53 admits only a fixed set of references, not a general manifest path expression, so any other string is a diagnostic at parse time and every reference resolves to one closed `(logical type, target AI)` pair.
-/// The logical type is carried so a reference can be rejected where it names the wrong type for its declaration site, such as an instruction alias pointing at a `use-skills` value.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum SameAsRef {
-    Instructions(TargetAi),
-    UseSkills(TargetAi),
-}
-
-/// Resolves a `same-as` reference string, returning `None` for any path outside the supported set.
-fn parse_same_as_ref(raw: &str) -> Option<SameAsRef> {
+/// Only the instruction paths remain: the `use-skills` references were removed with the consumer alias (issue #68), so a consumer path is now an unsupported reference like any other string.
+fn parse_same_as_ref(raw: &str) -> Option<TargetAi> {
     match raw {
-        "provider.instructions.claude" => Some(SameAsRef::Instructions(TargetAi::Claude)),
-        "provider.instructions.codex" => Some(SameAsRef::Instructions(TargetAi::Codex)),
-        "consumer.claude.use-skills" => Some(SameAsRef::UseSkills(TargetAi::Claude)),
-        "consumer.codex.use-skills" => Some(SameAsRef::UseSkills(TargetAi::Codex)),
+        "provider.instructions.claude" => Some(TargetAi::Claude),
+        "provider.instructions.codex" => Some(TargetAi::Codex),
         _ => None,
     }
 }
@@ -423,7 +413,7 @@ fn parse_instructions(node: &KdlNode, diags: &mut Vec<Diagnostic>) -> Instructio
 /// Parses the `same-as` alias form of a `provider.instructions.<target>` declaration.
 ///
 /// The alias form carries only the `same-as` property: no positional argument (rejected by the caller), no other property, and no children, so it cannot combine a normal source reference with an alias for one logical value.
-/// The reference must name another target's instruction declaration; a reference of a different logical type or to the declaring target itself is rejected here, while a reference to another alias is rejected later during resolution.
+/// The reference must name another target's instruction declaration; an unsupported reference or a reference to the declaring target itself is rejected here, while a reference to another alias is rejected later during resolution.
 fn parse_instruction_alias(
     node: &KdlNode,
     target: &str,
@@ -465,21 +455,11 @@ fn parse_instruction_alias(
         return None;
     };
 
-    let Some(reference) = parse_same_as_ref(raw) else {
+    let Some(referenced) = parse_same_as_ref(raw) else {
         diags.push(Diagnostic::new(
             DiagnosticCode::ManifestShape,
             format!(
                 "`provider.instructions.{target}` `same-as` reference `{raw}` is not a supported reference"
-            ),
-        ));
-        return None;
-    };
-
-    let SameAsRef::Instructions(referenced) = reference else {
-        diags.push(Diagnostic::new(
-            DiagnosticCode::ManifestShape,
-            format!(
-                "`provider.instructions.{target}` `same-as` must reference another `provider.instructions.<target>`, but `{raw}` is a different logical type"
             ),
         ));
         return None;
@@ -1213,26 +1193,10 @@ enum ConsumerItem<T> {
     UseSame(TargetAi),
 }
 
-/// A target's repeatable declaration sequence before cross-target reference resolution.
-struct SequenceParsed<T> {
-    /// True when the whole sequence is a legacy `use-skills same-as` alias (issue #53): the single `UseSame` item then follows alias rules (no alias chains) instead of `use-same-*` rules, and diagnostics name the alias form.
-    legacy_alias: bool,
-    items: Vec<ConsumerItem<T>>,
-}
-
-impl<T> SequenceParsed<T> {
-    fn local(items: Vec<ConsumerItem<T>>) -> Self {
-        SequenceParsed {
-            legacy_alias: false,
-            items,
-        }
-    }
-}
-
 /// One `consumer.<target>` block before cross-target reference resolution.
 struct TargetConsumerParsed {
-    use_skills: SequenceParsed<SkillUsage>,
-    use_agents: SequenceParsed<String>,
+    use_skills: Vec<ConsumerItem<SkillUsage>>,
+    use_agents: Vec<ConsumerItem<String>>,
 }
 
 /// The parsed-but-unresolved `consumer` block.
@@ -1291,9 +1255,6 @@ fn parse_target_consumer(
     let target = target_ai.as_str();
     let mut skill_items: Vec<ConsumerItem<SkillUsage>> = Vec::new();
     let mut agent_items: Vec<ConsumerItem<String>> = Vec::new();
-    let mut alias: Option<TargetAi> = None;
-    let mut alias_nodes = 0usize;
-    let mut other_skill_nodes = 0usize;
 
     if let Some(children) = node.children() {
         for child in children.nodes() {
@@ -1302,22 +1263,20 @@ fn parse_target_consumer(
                 // Nodes concatenate in declaration order, so the grouped form (`use-skills "a" "b"`) and the split form (`use-skills "a"` + `use-skills "b"`) parse identically and node boundaries carry no meaning after parse.
                 // A `use-same-*` node joins the same order-preserving concatenation, expanding at its own position (issue #60).
                 "use-skills" => {
-                    // A `same-as` property marks the alias form; its absence keeps the normal selection unchanged from issue #38.
+                    // The removed issue #53 alias form is detected by its `same-as` property and rejected with a migration hint rather than falling through to the generic property rejection, because released config-version=1 manifests used it (issue #68).
                     if child.get("same-as").is_some() {
-                        alias_nodes += 1;
-                        if let Some(referenced) =
-                            parse_use_skills_alias(child, target, target_ai, diags)
-                        {
-                            alias.get_or_insert(referenced);
-                        }
+                        diags.push(Diagnostic::new(
+                            DiagnosticCode::ManifestShape,
+                            format!(
+                                "`use-skills same-as` under `consumer.{target}` is no longer supported; use `use-same-skills \"<target>\"` instead"
+                            ),
+                        ));
                     } else {
-                        other_skill_nodes += 1;
                         skill_items
                             .push(ConsumerItem::Local(parse_use_skills(child, target, diags)));
                     }
                 }
                 "use-same-skills" => {
-                    other_skill_nodes += 1;
                     if let Some(referenced) = parse_use_same(
                         child,
                         "use-same-skills",
@@ -1350,32 +1309,9 @@ fn parse_target_consumer(
         }
     }
 
-    // A `same-as` alias is the whole `use-skills` value, so it cannot share a target with normal selections, `use-same-skills` additions, or a second alias; combining them would mean merging, which issue #53 does not support.
-    let use_skills = if alias_nodes == 0 {
-        SequenceParsed::local(skill_items)
-    } else if other_skill_nodes > 0 || alias_nodes > 1 {
-        diags.push(Diagnostic::new(
-            DiagnosticCode::ManifestShape,
-            format!(
-                "`consumer.{target}` must not combine a `use-skills same-as` alias with any other `use-skills` or `use-same-skills` selection"
-            ),
-        ));
-        // Fall back to the non-alias items so reference validation still runs on them; the manifest is already rejected.
-        SequenceParsed::local(skill_items)
-    } else {
-        match alias {
-            Some(referenced) => SequenceParsed {
-                legacy_alias: true,
-                items: vec![ConsumerItem::UseSame(referenced)],
-            },
-            // The single alias node was invalid and already reported; treat the target as selecting nothing.
-            None => SequenceParsed::local(Vec::new()),
-        }
-    };
-
     TargetConsumerParsed {
-        use_skills,
-        use_agents: SequenceParsed::local(agent_items),
+        use_skills: skill_items,
+        use_agents: agent_items,
     }
 }
 
@@ -1448,112 +1384,18 @@ fn parse_use_same(
     Some(referenced)
 }
 
-/// Parses the `same-as` alias form of a `use-skills` node.
-///
-/// The alias form carries only the `same-as` property: no Skill-name argument, no other property, and no `when` children, so it cannot combine a normal selection with an alias for one logical value.
-/// The reference must name another target's `use-skills` value; a reference of a different logical type or to the declaring target itself is rejected here, while a reference to another alias is rejected later during resolution.
-fn parse_use_skills_alias(
-    node: &KdlNode,
-    target: &str,
-    target_ai: TargetAi,
-    diags: &mut Vec<Diagnostic>,
-) -> Option<TargetAi> {
-    let mut ok = true;
-
-    if node.entries().iter().any(|e| e.name().is_none()) {
-        diags.push(Diagnostic::new(
-            DiagnosticCode::ManifestShape,
-            format!("`use-skills same-as` under `consumer.{target}` must not also name Skills"),
-        ));
-        ok = false;
-    }
-
-    for entry in node.entries() {
-        if entry.name().is_some_and(|name| name.value() != "same-as") {
-            diags.push(Diagnostic::new(
-                DiagnosticCode::ManifestShape,
-                format!(
-                    "`use-skills same-as` under `consumer.{target}` must not declare other properties"
-                ),
-            ));
-            ok = false;
-        }
-    }
-
-    if node.children().is_some() {
-        diags.push(Diagnostic::new(
-            DiagnosticCode::ManifestShape,
-            format!(
-                "`use-skills same-as` under `consumer.{target}` must not have a child block, including `when`"
-            ),
-        ));
-        ok = false;
-    }
-
-    let value = node
-        .get("same-as")
-        .expect("the caller checked that `same-as` is present");
-    let Some(raw) = value.as_string() else {
-        diags.push(Diagnostic::new(
-            DiagnosticCode::ManifestShape,
-            format!("`use-skills same-as` under `consumer.{target}` must have a string value"),
-        ));
-        return None;
-    };
-
-    let Some(reference) = parse_same_as_ref(raw) else {
-        diags.push(Diagnostic::new(
-            DiagnosticCode::ManifestShape,
-            format!(
-                "`use-skills same-as` under `consumer.{target}` reference `{raw}` is not a supported reference"
-            ),
-        ));
-        return None;
-    };
-
-    let SameAsRef::UseSkills(referenced) = reference else {
-        diags.push(Diagnostic::new(
-            DiagnosticCode::ManifestShape,
-            format!(
-                "`use-skills same-as` under `consumer.{target}` must reference another `consumer.<target>.use-skills`, but `{raw}` is a different logical type"
-            ),
-        ));
-        return None;
-    };
-
-    if referenced == target_ai {
-        diags.push(Diagnostic::new(
-            DiagnosticCode::ManifestShape,
-            format!("`use-skills same-as` under `consumer.{target}` must not reference itself"),
-        ));
-        return None;
-    }
-
-    if !ok {
-        return None;
-    }
-
-    Some(referenced)
-}
-
 /// Resolves parsed consumer targets into the domain `Consumer`.
 ///
-/// Resolution runs after the whole `consumer` block is parsed, so a `use-same-*` or `same-as` reference reads the referenced target's effective value regardless of sibling declaration order.
+/// Resolution runs after the whole `consumer` block is parsed, so a `use-same-*` reference reads the referenced target's effective value regardless of sibling declaration order.
 /// Skills and agents resolve as independent reference graphs, each memoized across targets so every sequence is computed once and a cycle is reported once.
 fn resolve_consumer(parsed: &ConsumerParsed, diags: &mut Vec<Diagnostic>) -> Consumer {
     let mut skills = SequenceResolver::new(
         |target: &TargetConsumerParsed| &target.use_skills,
-        SequenceLabels {
-            use_same: "use-same-skills",
-            logical: "use-skills",
-        },
+        "use-same-skills",
     );
     let mut agents = SequenceResolver::new(
         |target: &TargetConsumerParsed| &target.use_agents,
-        SequenceLabels {
-            use_same: "use-same-agents",
-            logical: "use-agents",
-        },
+        "use-same-agents",
     );
 
     let mut resolve = |ai: TargetAi, diags: &mut Vec<Diagnostic>| {
@@ -1570,12 +1412,6 @@ fn resolve_consumer(parsed: &ConsumerParsed, diags: &mut Vec<Diagnostic>) -> Con
     }
 }
 
-/// Node names used in sequence-resolution diagnostics, fixed per logical value (`use-skills` / `use-agents`).
-struct SequenceLabels {
-    use_same: &'static str,
-    logical: &'static str,
-}
-
 /// Resolution state of one target's slot in a cross-target reference walk.
 enum SequenceState<T> {
     Pending,
@@ -1587,10 +1423,10 @@ enum SequenceState<T> {
 /// Resolves one logical repeatable value (`use-skills` or `use-agents`) across targets.
 ///
 /// `use-same-*` items expand the referenced target's *effective* sequence — itself resolved through this resolver — so references compose, and item order is preserved through expansion (issue #60).
-/// Legacy `use-skills same-as` aliases resolve through the same walk but keep their issue #53 rules: an alias must not reference another alias, and its diagnostics name the alias form.
 struct SequenceResolver<T, F> {
     get: F,
-    labels: SequenceLabels,
+    /// The `use-same-*` node name for this logical value, used verbatim in diagnostics.
+    node_name: &'static str,
     states: [SequenceState<Vec<T>>; 2],
 }
 
@@ -1604,12 +1440,12 @@ fn state_index(ai: TargetAi) -> usize {
 impl<T, F> SequenceResolver<T, F>
 where
     T: Clone,
-    F: Fn(&TargetConsumerParsed) -> &SequenceParsed<T>,
+    F: Fn(&TargetConsumerParsed) -> &Vec<ConsumerItem<T>>,
 {
-    fn new(get: F, labels: SequenceLabels) -> Self {
+    fn new(get: F, node_name: &'static str) -> Self {
         SequenceResolver {
             get,
-            labels,
+            node_name,
             states: [SequenceState::Pending, SequenceState::Pending],
         }
     }
@@ -1628,19 +1464,17 @@ where
         }
         self.states[state_index(ai)] = SequenceState::InProgress;
 
-        let sequence = (self.get)(
+        let items = (self.get)(
             parsed
                 .get(ai)
                 .expect("only declared targets are resolved or referenced"),
         );
         let mut values = Vec::new();
-        for item in &sequence.items {
+        for item in items {
             match item {
                 ConsumerItem::Local(local) => values.extend(local.iter().cloned()),
                 ConsumerItem::UseSame(referenced) => {
-                    if let Some(expanded) =
-                        self.expansion(ai, *referenced, sequence.legacy_alias, parsed, diags)
-                    {
+                    if let Some(expanded) = self.expansion(ai, *referenced, parsed, diags) {
                         values.extend(expanded);
                     }
                 }
@@ -1658,42 +1492,18 @@ where
         &mut self,
         ai: TargetAi,
         referenced: TargetAi,
-        legacy_alias: bool,
         parsed: &ConsumerParsed,
         diags: &mut Vec<Diagnostic>,
     ) -> Option<Vec<T>> {
-        let Some(referenced_target) = parsed.get(referenced) else {
-            let message = if legacy_alias {
-                format!(
-                    "`consumer.{}` `{} same-as` references `consumer.{}.{}`, but `consumer.{}` is not declared",
-                    ai.as_str(),
-                    self.labels.logical,
-                    referenced.as_str(),
-                    self.labels.logical,
-                    referenced.as_str()
-                )
-            } else {
-                format!(
-                    "`consumer.{}` `{}` references `consumer.{}`, but `consumer.{}` is not declared",
-                    ai.as_str(),
-                    self.labels.use_same,
-                    referenced.as_str(),
-                    referenced.as_str()
-                )
-            };
-            diags.push(Diagnostic::new(DiagnosticCode::ManifestShape, message));
-            return None;
-        };
-
-        if legacy_alias && (self.get)(referenced_target).legacy_alias {
+        if parsed.get(referenced).is_none() {
             diags.push(Diagnostic::new(
                 DiagnosticCode::ManifestShape,
                 format!(
-                    "`consumer.{}` `{} same-as` references `consumer.{}.{}`, which is itself a `same-as` alias; alias chains are not supported",
+                    "`consumer.{}` `{}` references `consumer.{}`, but `consumer.{}` is not declared",
                     ai.as_str(),
-                    self.labels.logical,
+                    self.node_name,
                     referenced.as_str(),
-                    self.labels.logical
+                    referenced.as_str()
                 ),
             ));
             return None;
@@ -1703,16 +1513,12 @@ where
             self.states[state_index(referenced)],
             SequenceState::InProgress
         ) {
-            let node = if legacy_alias {
-                format!("`{} same-as`", self.labels.logical)
-            } else {
-                format!("`{}`", self.labels.use_same)
-            };
             diags.push(Diagnostic::new(
                 DiagnosticCode::ManifestShape,
                 format!(
-                    "`consumer.{}` {node} reference to `consumer.{}` forms a reference cycle",
+                    "`consumer.{}` `{}` reference to `consumer.{}` forms a reference cycle",
                     ai.as_str(),
+                    self.node_name,
                     referenced.as_str()
                 ),
             ));
@@ -3151,6 +2957,7 @@ enozunu config-version=1 {
 
     #[test]
     fn rejects_a_same_as_instruction_alias_referencing_a_use_skills_value() {
+        // The consumer reference paths left the supported set with the use-skills alias (issue #68), so a consumer path is an unsupported reference rather than a type mismatch.
         let text = manifest_with_instructions(
             r#"      claude { local { path "CLAUDE.base.md" } }
       codex same-as="consumer.claude.use-skills""#,
@@ -3160,7 +2967,7 @@ enozunu config-version=1 {
         assert!(
             messages
                 .iter()
-                .any(|m| m.contains("different logical type")),
+                .any(|m| m.contains("is not a supported reference")),
             "{messages:?}"
         );
     }
@@ -3413,7 +3220,7 @@ enozunu config-version=1 {
         );
     }
 
-    /// Wraps `consumer.claude` and `consumer.codex` bodies in a manifest declaring skills `a` / `b`, agent `x`, and both instruction sources, so `use-skills` alias tests exercise both targets against one provider pool without tripping reference or `when` validation.
+    /// Wraps `consumer.claude` and `consumer.codex` bodies in a manifest declaring skills `a` / `b`, agent `x`, and both instruction sources, so `use-same-*` tests exercise both targets against one provider pool without tripping reference or `when` validation.
     fn consumer_targets(claude_body: &str, codex_body: &str) -> String {
         format!(
             r#"
@@ -3445,243 +3252,13 @@ enozunu config-version=1 {{
     }
 
     #[test]
-    fn resolves_a_same_as_use_skills_alias_to_the_referenced_selection() {
+    fn rejects_the_removed_use_skills_same_as_alias_with_a_migration_hint() {
+        // The migration wording is pinned by e2e/validate_use_same.repor; this asserts the removed alias yields exactly one configuration error and nothing resolves from it.
         let text = consumer_targets(
-            r#"      use-skills "a" "b""#,
+            r#"      use-skills "a""#,
             r#"      use-skills same-as="consumer.claude.use-skills""#,
         );
-        let manifest = parse(&text).unwrap();
-        let claude = manifest.consumer.claude.as_ref().unwrap();
-        let codex = manifest.consumer.codex.as_ref().unwrap();
-        assert_eq!(skill_names(codex), ["a", "b"]);
-        assert_eq!(codex.use_skills, claude.use_skills);
-    }
-
-    #[test]
-    fn resolves_a_same_as_use_skills_alias_declared_before_its_referent() {
-        // The alias appears in the claude block, which precedes the codex block it references, so resolution must run after every target is parsed.
-        let text = consumer_targets(
-            r#"      use-skills same-as="consumer.codex.use-skills""#,
-            r#"      use-skills "a""#,
-        );
-        let manifest = parse(&text).unwrap();
-        assert_eq!(
-            skill_names(manifest.consumer.claude.as_ref().unwrap()),
-            ["a"]
-        );
-    }
-
-    #[test]
-    fn reuses_normalized_when_rules_through_a_use_skills_alias() {
-        let text = consumer_targets(
-            r#"      use-skills "a" {
-        when "reviewing code"
-      }"#,
-            r#"      use-skills same-as="consumer.claude.use-skills""#,
-        );
-        let manifest = parse(&text).unwrap();
-        let codex = manifest.consumer.codex.as_ref().unwrap();
-        assert_eq!(
-            codex.use_skills,
-            [SkillUsage {
-                name: "a".to_owned(),
-                whens: vec!["reviewing code".to_owned()],
-            }]
-        );
-    }
-
-    #[test]
-    fn reuses_an_empty_use_skills_selection_through_same_as() {
-        // The claude block is declared but selects no Skills, so the alias reuses an empty selection rather than failing.
-        let text = consumer_targets(
-            "",
-            r#"      use-skills same-as="consumer.claude.use-skills""#,
-        );
-        let manifest = parse(&text).unwrap();
-        let codex = manifest.consumer.codex.as_ref().unwrap();
-        assert!(codex.use_skills.is_empty());
-    }
-
-    #[test]
-    fn rejects_a_same_as_use_skills_alias_to_an_undeclared_consumer() {
-        // Only a codex consumer is declared, so the referenced claude block does not exist.
-        let text = r#"
-enozunu config-version=1 {
-  provider {
-    skills {
-      skill "a" { git { url "https://example.com/r"; branch "main"; path "s/a" } }
-    }
-  }
-  consumer {
-    codex {
-      use-skills same-as="consumer.claude.use-skills"
-    }
-  }
-}
-"#;
-        let messages = messages(parse(text));
-        assert!(
-            messages.iter().any(|m| m.contains("is not declared")),
-            "{messages:?}"
-        );
-    }
-
-    #[test]
-    fn rejects_a_same_as_use_skills_alias_to_another_alias() {
-        let text = consumer_targets(
-            r#"      use-skills same-as="consumer.codex.use-skills""#,
-            r#"      use-skills same-as="consumer.claude.use-skills""#,
-        );
-        let messages = messages(parse(&text));
-        assert!(
-            messages
-                .iter()
-                .any(|m| m.contains("alias chains are not supported")),
-            "{messages:?}"
-        );
-    }
-
-    #[test]
-    fn rejects_a_self_referential_same_as_use_skills_alias() {
-        let text = consumer_targets(
-            r#"      use-skills same-as="consumer.claude.use-skills""#,
-            "",
-        );
-        let messages = messages(parse(&text));
-        assert!(
-            messages
-                .iter()
-                .any(|m| m.contains("must not reference itself")),
-            "{messages:?}"
-        );
-    }
-
-    #[test]
-    fn rejects_a_same_as_use_skills_alias_referencing_an_instruction_value() {
-        let text = consumer_targets(
-            r#"      use-skills "a""#,
-            r#"      use-skills same-as="provider.instructions.claude""#,
-        );
-        let messages = messages(parse(&text));
-        assert!(
-            messages
-                .iter()
-                .any(|m| m.contains("different logical type")),
-            "{messages:?}"
-        );
-    }
-
-    #[test]
-    fn rejects_a_same_as_use_skills_alias_referencing_use_agents() {
-        let text = consumer_targets(
-            r#"      use-skills "a""#,
-            r#"      use-skills same-as="consumer.claude.use-agents""#,
-        );
-        let messages = messages(parse(&text));
-        assert!(
-            messages
-                .iter()
-                .any(|m| m.contains("not a supported reference")),
-            "{messages:?}"
-        );
-    }
-
-    #[test]
-    fn rejects_combining_a_use_skills_alias_with_a_normal_selection() {
-        for codex_body in [
-            r#"      use-skills same-as="consumer.claude.use-skills"
-      use-skills "a""#,
-            r#"      use-skills "a"
-      use-skills same-as="consumer.claude.use-skills""#,
-            r#"      use-skills same-as="consumer.claude.use-skills"
-      use-skills same-as="consumer.claude.use-skills""#,
-        ] {
-            let text = consumer_targets(r#"      use-skills "a""#, codex_body);
-            let messages = messages(parse(&text));
-            assert!(
-                messages.iter().any(|m| m.contains("must not combine")),
-                "combining forms must be rejected: {codex_body}\n{messages:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn rejects_a_non_string_use_skills_same_as_value() {
-        let text = consumer_targets(r#"      use-skills "a""#, r#"      use-skills same-as=5"#);
-        assert!(codes(parse(&text)).contains(&DiagnosticCode::ManifestShape));
-    }
-
-    #[test]
-    fn rejects_a_use_skills_alias_that_also_names_skills() {
-        let text = consumer_targets(
-            r#"      use-skills "a""#,
-            r#"      use-skills "a" same-as="consumer.claude.use-skills""#,
-        );
-        assert!(codes(parse(&text)).contains(&DiagnosticCode::ManifestShape));
-    }
-
-    #[test]
-    fn rejects_a_use_skills_alias_with_when_children() {
-        let text = consumer_targets(
-            r#"      use-skills "a""#,
-            r#"      use-skills same-as="consumer.claude.use-skills" {
-        when "reviewing code"
-      }"#,
-        );
-        let messages = messages(parse(&text));
-        assert!(
-            messages
-                .iter()
-                .any(|m| m.contains("must not have a child block")),
-            "{messages:?}"
-        );
-    }
-
-    #[test]
-    fn a_use_skills_alias_carries_when_rules_into_the_when_instruction_requirement() {
-        // Claude's aliased selection carries a `when`, so codex inherits it and must declare its own instruction source; without one, the issue #38 rule fails after resolution.
-        let text = r#"
-enozunu config-version=1 {
-  provider {
-    skills {
-      skill "a" { git { url "https://example.com/r"; branch "main"; path "s/a" } }
-    }
-    instructions {
-      claude { local { path "CLAUDE.base.md" } }
-    }
-  }
-  consumer {
-    claude {
-      use-skills "a" {
-        when "reviewing code"
-      }
-    }
-    codex {
-      use-skills same-as="consumer.claude.use-skills"
-    }
-  }
-}
-"#;
-        let messages = messages(parse(text));
-        assert!(
-            messages
-                .iter()
-                .any(|m| m.contains("`provider.instructions.codex` is not declared")),
-            "the inherited `when` must require the codex instruction source: {messages:?}"
-        );
-    }
-
-    #[test]
-    fn use_agents_is_unaffected_by_a_use_skills_alias() {
-        let text = consumer_targets(
-            r#"      use-skills "a""#,
-            r#"      use-skills same-as="consumer.claude.use-skills"
-      use-agents "x""#,
-        );
-        let manifest = parse(&text).unwrap();
-        let codex = manifest.consumer.codex.as_ref().unwrap();
-        assert_eq!(skill_names(codex), ["a"]);
-        assert_eq!(codex.use_agents, ["x"]);
+        assert_eq!(codes(parse(&text)), [DiagnosticCode::ManifestShape]);
     }
 
     #[test]
@@ -3805,16 +3382,6 @@ enozunu config-version=1 {
     }
 
     #[test]
-    fn rejects_a_cycle_between_a_legacy_alias_and_use_same_skills() {
-        // The legacy alias and the new expansion resolve through the same reference walk, so a mixed cycle is detected like a pure `use-same-skills` cycle.
-        let text = consumer_targets(
-            r#"      use-skills same-as="consumer.codex.use-skills""#,
-            r#"      use-same-skills "claude""#,
-        );
-        assert_eq!(codes(parse(&text)), [DiagnosticCode::ManifestShape]);
-    }
-
-    #[test]
     fn rejects_use_same_skills_shape_violations() {
         for body in [
             r#"      use-same-skills"#,
@@ -3833,16 +3400,6 @@ enozunu config-version=1 {
                 "`{body}` must be rejected: {codes:?}"
             );
         }
-    }
-
-    #[test]
-    fn rejects_combining_a_use_skills_alias_with_use_same_skills() {
-        let text = consumer_targets(
-            r#"      use-skills "a""#,
-            r#"      use-skills same-as="consumer.claude.use-skills"
-      use-same-skills "claude""#,
-        );
-        assert_eq!(codes(parse(&text)), [DiagnosticCode::ManifestShape]);
     }
 
     #[test]

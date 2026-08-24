@@ -426,8 +426,8 @@ enozunu config-version=1 {
     }
 
     #[test]
-    fn a_same_as_instruction_alias_keeps_the_aliasing_targets_own_identity() {
-        // Codex reuses Claude's instruction source with `same-as`, so its planned instruction must carry Claude's source reference but keep Codex's own path, name, and target AI.
+    fn a_use_same_instruction_reference_keeps_the_referencing_targets_own_identity() {
+        // Codex reuses Claude's instruction source with `use-same-instruction`, so its planned instruction must carry Claude's source reference but keep Codex's own path, name, and target AI.
         let text = r#"
 enozunu config-version=1 {
   provider {
@@ -439,7 +439,9 @@ enozunu config-version=1 {
           path "instructions/base.md"
         }
       }
-      codex same-as="provider.instructions.claude"
+      codex {
+        use-same-instruction "claude"
+      }
     }
   }
   consumer {
@@ -468,7 +470,7 @@ enozunu config-version=1 {
                 path: "instructions/base.md".to_owned(),
             }
         );
-        // The aliasing target keeps its own identity: Codex writes AGENTS.md under its own source name, not Claude's.
+        // The referencing target keeps its own identity: Codex writes AGENTS.md under its own source name, not Claude's.
         assert_eq!(codex.source_name, "codex");
         assert_eq!(codex.target_rel_path, "AGENTS.md");
     }

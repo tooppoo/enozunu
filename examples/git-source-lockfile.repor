@@ -1,0 +1,105 @@
+document file {
+  title "Resolve a git source and lock it"
+  group "Reproducibility"
+  order 10
+
+  description ```
+    A `git` source with a `branch` selector is mutable: the branch may move between runs.
+    The first `enozunu summon` records the resolved commit in `enozunu.lock.json`, and later runs materialize that recorded commit even after the branch advances.
+    Commit the lock file to make every machine materialize the same content; run `enozunu summon --update` when you want to follow the moved branch and refresh the lock.
+    Each case builds a git repository inside its own workspace and points the manifest at it with a `file://` URL, so the real resolver runs while the example stays offline.
+    The `SOURCE_URL` placeholder is substituted by a shell step because the workspace path is only known at run time, and the git steps run with `GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1` so ambient developer configuration cannot break the fixture.
+    ```
+}
+
+before_each {
+  write <"source-repo/skills/demo-skill/SKILL.md"> ```
+    ---
+    name: demo-skill
+    description: demo skill resolved over git transport
+    ---
+
+    # Demo Skill OLD
+    ```
+  write <"enozunu.kdl"> ```
+    enozunu config-version=1 {
+      provider {
+        skills {
+          skill "demo-skill" {
+            git {
+              url "SOURCE_URL"
+              branch "main"
+              path "skills/demo-skill"
+            }
+          }
+        }
+      }
+      consumer {
+        claude {
+          use-skills "demo-skill"
+        }
+      }
+    }
+    ```
+}
+
+case "the first summon resolves the branch and creates the lock file" {
+  $ GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 git init --quiet --initial-branch main source-repo
+  $ git -C source-repo config user.email "examples@example.com"
+  $ git -C source-repo config user.name "examples"
+  $ GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 git -C source-repo add --all
+  $ GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 git -C source-repo commit --quiet -m initial
+  $ sed -i "s|SOURCE_URL|file://$PWD/source-repo|" enozunu.kdl
+
+  $ enozunu summon
+
+  assert {
+    exit 0
+    stdout contains "created enozunu.lock.json"
+    file <".claude/skills/demo-skill/SKILL.md"> contains "Demo Skill OLD"
+    file <"enozunu.lock.json"> contains "\"type\": \"branch\""
+    file <"enozunu.lock.json"> contains "\"value\": \"main\""
+  }
+}
+
+document case {
+  title "The lock pins the commit until --update"
+  description ```
+    After the branch advances, a plain `summon` still materializes the locked commit, while `summon --update` follows the branch head and rewrites the lock.
+    ```
+}
+case "summon stays on the locked commit until --update follows the branch" {
+  $ GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 git init --quiet --initial-branch main source-repo
+  $ git -C source-repo config user.email "examples@example.com"
+  $ git -C source-repo config user.name "examples"
+  $ GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 git -C source-repo add --all
+  $ GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 git -C source-repo commit --quiet -m old
+  $ sed -i "s|SOURCE_URL|file://$PWD/source-repo|" enozunu.kdl
+
+  # First run locks the current branch head.
+  $ enozunu summon
+  assert {
+    exit 0
+    file <".claude/skills/demo-skill/SKILL.md"> contains "Demo Skill OLD"
+  }
+
+  # Advance the branch so its head no longer matches the locked commit.
+  $ sed -i 's/Demo Skill OLD/Demo Skill NEW/' source-repo/skills/demo-skill/SKILL.md
+  $ GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 git -C source-repo commit --quiet -am new
+
+  $ enozunu summon
+  assert {
+    exit 0
+    file <".claude/skills/demo-skill/SKILL.md"> contains "Demo Skill OLD"
+    not {
+      file <".claude/skills/demo-skill/SKILL.md"> contains "Demo Skill NEW"
+    }
+  }
+
+  $ enozunu summon --update
+  assert {
+    exit 0
+    stdout contains "updated enozunu.lock.json"
+    file <".claude/skills/demo-skill/SKILL.md"> contains "Demo Skill NEW"
+  }
+}

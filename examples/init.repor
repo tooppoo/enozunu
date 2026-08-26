@@ -1,0 +1,37 @@
+document file {
+  title "Initialize a project"
+  group "Getting started"
+  order 10
+
+  description ```
+    `enozunu init` scaffolds a starter `enozunu.kdl` filled with placeholder values, plus `.enozunu/.gitignore` so the resolver cache under `.enozunu/cache/` stays out of version control.
+    Run it once per project and then edit the manifest to declare your real sources.
+    ```
+}
+
+case "init scaffolds a starter manifest" {
+  $ enozunu init
+
+  assert {
+    exit 0
+    stdout contains "created"
+    file <"enozunu.kdl"> exists
+    file <".enozunu/.gitignore"> exists
+  }
+}
+
+document case {
+  title "Re-running init is safe"
+  description ```
+    A second `init` fails instead of clobbering the manifest you may have already edited.
+    ```
+}
+case "init refuses to overwrite an existing manifest" {
+  $ enozunu init
+  $ enozunu init
+
+  assert {
+    exit 1
+    stderr contains "refusing to overwrite"
+  }
+}

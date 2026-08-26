@@ -17,3 +17,12 @@ build-release:
 ai-setup: build-release
   enozunu summon
   git kura tools install --all
+
+# regenerate examples/README.md from the example scenarios
+[group('docs')]
+examples-gen:
+  reportage docs 'examples/*.repor' \
+    --out-dir examples \
+    --index-file-name README.md \
+    --format markdown \
+    --title "Enozunu Examples"

@@ -1,0 +1,73 @@
+document file {
+  title "Share one source pool across targets"
+  group "Materialize"
+  order 20
+
+  description ```
+    Claude and Codex select from the same `provider.skills` and `provider.agents` pool, and each selection lands in that target's native path.
+    Skills are target-neutral, so both targets may select the same skill.
+    Agent sources are target-native — a Claude agent is a Markdown file and a Codex custom agent is a TOML file — and enozunu never converts between the two.
+    ```
+}
+
+case "summon materializes one skill pool into both target-native paths" {
+  write <"sources/demo-skill/SKILL.md"> ```
+    ---
+    name: demo-skill
+    description: demo skill shared by both targets
+    ---
+
+    # Demo Skill
+    ```
+  write <"sources/claude-agent.md"> ```
+    # Demo agent for Claude
+    ```
+  write <"sources/codex-agent.toml"> ```
+    name = "demo agent for Codex"
+    ```
+  write <"enozunu.kdl"> ```
+    enozunu config-version=1 {
+      provider {
+        skills {
+          skill "demo-skill" {
+            local {
+              path "sources/demo-skill"
+            }
+          }
+        }
+        agents {
+          agent "claude-agent" {
+            local {
+              path "sources/claude-agent.md"
+            }
+          }
+          agent "codex-agent" {
+            local {
+              path "sources/codex-agent.toml"
+            }
+          }
+        }
+      }
+      consumer {
+        claude {
+          use-skills "demo-skill"
+          use-agents "claude-agent"
+        }
+        codex {
+          use-skills "demo-skill"
+          use-agents "codex-agent"
+        }
+      }
+    }
+    ```
+
+  $ enozunu summon
+
+  assert {
+    exit 0
+    file <".claude/skills/demo-skill/SKILL.md"> exists
+    file <".agents/skills/demo-skill/SKILL.md"> exists
+    file <".claude/agents/claude-agent.md"> contains "Demo agent for Claude"
+    file <".codex/agents/codex-agent.toml"> contains "demo agent for Codex"
+  }
+}

@@ -120,6 +120,8 @@ To use Enozunu, read [the guide](docs/guide/README.md):
 - [Manifest format](docs/guide/manifest.md)
 - [Generated output](docs/guide/generated-output.md)
 
+To see each command in action, read [the runnable examples](examples/README.md), which are executed as part of the test suite.
+
 To understand how Enozunu works, read [the design docs](docs/design/README.md):
 
 - [Philosophy](docs/design/philosophy.md)

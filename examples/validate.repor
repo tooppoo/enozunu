@@ -1,0 +1,35 @@
+document file {
+  title "Validate the manifest"
+  group "Getting started"
+  order 20
+
+  description ```
+    `enozunu validate` checks that `enozunu.kdl` is a well-formed manifest without resolving sources or writing anything.
+    Use it as a fast pre-flight check before `enozunu summon`, for example in a pre-commit hook or a CI lint step.
+    ```
+}
+
+case "validate accepts a freshly initialized manifest" {
+  $ enozunu init
+  $ enozunu validate
+
+  assert {
+    exit 0
+    stdout contains "is valid"
+  }
+}
+
+document case {
+  title "Validation failures exit non-zero"
+  description ```
+    A missing manifest is reported on stderr with exit status 1, so a scripted check fails loudly instead of passing vacuously.
+    ```
+}
+case "validate reports a missing manifest" {
+  $ enozunu validate
+
+  assert {
+    exit 1
+    stderr contains "failed to read ./enozunu.kdl"
+  }
+}

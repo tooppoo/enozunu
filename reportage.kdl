@@ -11,5 +11,6 @@ reportage {
 
   tests {
     path "e2e/**/*.repor"
+    path "examples/**/*.repor"
   }
 }

@@ -2,7 +2,7 @@ import "coverage.just"
 
 # run all checks
 [group('check')]
-check: coverage fmt lint
+check: coverage fmt lint examples-check
 
 # run all formatting checks
 [group('check')]

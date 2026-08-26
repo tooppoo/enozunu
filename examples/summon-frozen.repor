@@ -1,0 +1,75 @@
+document file {
+  title "Verify reproducibility in CI with --frozen"
+  group "Reproducibility"
+  order 20
+
+  description ```
+    `enozunu summon --frozen` materializes strictly from `enozunu.lock.json` and fails when the lock file is missing or lacks an entry for a mutable source.
+    Run it in CI so a manifest change that was committed without its refreshed lock fails the build instead of silently resolving something new.
+    A missing lock always means it was never created or committed, so frozen mode fails even for a manifest with no mutable sources.
+    ```
+}
+
+before_each {
+  write <"sources/demo-skill/SKILL.md"> ```
+    ---
+    name: demo-skill
+    description: demo skill for the frozen workflow
+    ---
+
+    # Demo Skill
+    ```
+  write <"enozunu.kdl"> ```
+    enozunu config-version=1 {
+      provider {
+        skills {
+          skill "demo-skill" {
+            local {
+              path "sources/demo-skill"
+            }
+          }
+        }
+      }
+      consumer {
+        claude {
+          use-skills "demo-skill"
+        }
+      }
+    }
+    ```
+}
+
+case "summon --frozen fails when the lock file is missing" {
+  $ enozunu summon --frozen
+
+  assert {
+    exit 1
+    stderr contains "lock-out-of-date"
+    not {
+      dir <".claude"> exists
+    }
+    not {
+      file <"enozunu.lock.json"> exists
+    }
+  }
+}
+
+document case {
+  title "The CI workflow"
+  description ```
+    A normal `summon` writes the lock once; committing it makes the later frozen run pass.
+    ```
+}
+case "summon --frozen passes once a normal summon has written the lock" {
+  $ enozunu summon
+  assert {
+    exit 0
+    file <"enozunu.lock.json"> exists
+  }
+
+  $ enozunu summon --frozen
+  assert {
+    exit 0
+    file <".claude/skills/demo-skill/SKILL.md"> exists
+  }
+}

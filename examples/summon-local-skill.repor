@@ -1,0 +1,49 @@
+document file {
+  title "Materialize a local skill"
+  group "Materialize"
+  order 10
+
+  description ```
+    The smallest useful manifest: one `local` skill source under `provider` and one `use-skills` selection under `consumer.claude`.
+    `enozunu summon` copies the source into the Claude-native path `.claude/skills/<name>/` and records what it wrote in `.enozunu/provenance.json`.
+    A `local` source lives inside the project, so nothing is fetched over the network.
+    ```
+}
+
+case "summon materializes a local skill into the Claude-native path" {
+  write <"sources/demo-skill/SKILL.md"> ```
+    ---
+    name: demo-skill
+    description: demo skill materialized from a local source
+    ---
+
+    # Demo Skill
+    ```
+  write <"enozunu.kdl"> ```
+    enozunu config-version=1 {
+      provider {
+        skills {
+          skill "demo-skill" {
+            local {
+              path "sources/demo-skill"
+            }
+          }
+        }
+      }
+      consumer {
+        claude {
+          use-skills "demo-skill"
+        }
+      }
+    }
+    ```
+
+  $ enozunu summon
+
+  assert {
+    exit 0
+    stdout contains "materialized"
+    file <".claude/skills/demo-skill/SKILL.md"> contains "demo skill materialized from a local source"
+    file <".enozunu/provenance.json"> contains "demo-skill"
+  }
+}

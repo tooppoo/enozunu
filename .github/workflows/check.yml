@@ -41,6 +41,8 @@ jobs:
       # fetches reportage's install.sh from its main branch at run time, so only
       # the CLI binary is version-pinned, not the installer script itself.
       - uses: tooppoo/reportage-actions/setup@57256bb4c6a89429c4c37133d1619436921263e3 # main
+        with:
+          version: 0.0.7
 
       - name: just check
         run: just check

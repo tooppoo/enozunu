@@ -14,9 +14,7 @@
     },
     "ghcr.io/tooppoo/catalog-devcontainer-features/git-kura:0": {},
     "ghcr.io/tooppoo/catalog-devcontainer-features/rellog:0": {},
-    "ghcr.io/tooppoo/catalog-devcontainer-features/reportage:0": {
-      "version": "0.0.9"
-    }
+    "ghcr.io/tooppoo/catalog-devcontainer-features/reportage:0": {}
   },
   "customizations": {
     "vscode": {

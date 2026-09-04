@@ -398,7 +398,38 @@ The `SOURCE_URL` placeholder is substituted by a shell step because the workspac
 <a id="case-4-1-1-the-first-summon-resolves-the-branch-and-creates-the-lock-file"></a>
 #### the first summon resolves the branch and creates the lock file
 
-```reportage
+````reportage
+before_each {
+  write <"source-repo/skills/demo-skill/SKILL.md"> ```
+    ---
+    name: demo-skill
+    description: demo skill resolved over git transport
+    ---
+
+    # Demo Skill OLD
+    ```
+  write <"enozunu.kdl"> ```
+    enozunu config-version=1 {
+      provider {
+        skills {
+          skill "demo-skill" {
+            git {
+              url "SOURCE_URL"
+              branch "main"
+              path "skills/demo-skill"
+            }
+          }
+        }
+      }
+      consumer {
+        claude {
+          use-skills "demo-skill"
+        }
+      }
+    }
+    ```
+}
+
 case "the first summon resolves the branch and creates the lock file" {
   $ GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 git init --quiet --initial-branch main source-repo
   $ git -C source-repo config user.email "examples@example.com"
@@ -417,14 +448,45 @@ case "the first summon resolves the branch and creates the lock file" {
     file <"enozunu.lock.json"> contains "\"value\": \"main\""
   }
 }
-```
+````
 
 <a id="case-4-1-2-the-lock-pins-the-commit-until-update"></a>
 #### The lock pins the commit until --update
 
 After the branch advances, a plain `summon` still materializes the locked commit, while `summon --update` follows the branch head and rewrites the lock.
 
-```reportage
+````reportage
+before_each {
+  write <"source-repo/skills/demo-skill/SKILL.md"> ```
+    ---
+    name: demo-skill
+    description: demo skill resolved over git transport
+    ---
+
+    # Demo Skill OLD
+    ```
+  write <"enozunu.kdl"> ```
+    enozunu config-version=1 {
+      provider {
+        skills {
+          skill "demo-skill" {
+            git {
+              url "SOURCE_URL"
+              branch "main"
+              path "skills/demo-skill"
+            }
+          }
+        }
+      }
+      consumer {
+        claude {
+          use-skills "demo-skill"
+        }
+      }
+    }
+    ```
+}
+
 case "summon stays on the locked commit until --update follows the branch" {
   $ GIT_CONFIG_GLOBAL=/dev/null GIT_CONFIG_NOSYSTEM=1 git init --quiet --initial-branch main source-repo
   $ git -C source-repo config user.email "examples@example.com"
@@ -460,7 +522,7 @@ case "summon stays on the locked commit until --update follows the branch" {
     file <".claude/skills/demo-skill/SKILL.md"> contains "Demo Skill NEW"
   }
 }
-```
+````
 
 <a id="file-4-2-verify-reproducibility-in-ci-with-frozen"></a>
 ### Verify reproducibility in CI with --frozen
@@ -474,7 +536,36 @@ A missing lock always means it was never created or committed, so frozen mode fa
 <a id="case-4-2-1-summon-frozen-fails-when-the-lock-file-is-missing"></a>
 #### summon --frozen fails when the lock file is missing
 
-```reportage
+````reportage
+before_each {
+  write <"sources/demo-skill/SKILL.md"> ```
+    ---
+    name: demo-skill
+    description: demo skill for the frozen workflow
+    ---
+
+    # Demo Skill
+    ```
+  write <"enozunu.kdl"> ```
+    enozunu config-version=1 {
+      provider {
+        skills {
+          skill "demo-skill" {
+            local {
+              path "sources/demo-skill"
+            }
+          }
+        }
+      }
+      consumer {
+        claude {
+          use-skills "demo-skill"
+        }
+      }
+    }
+    ```
+}
+
 case "summon --frozen fails when the lock file is missing" {
   $ enozunu summon --frozen
 
@@ -489,14 +580,43 @@ case "summon --frozen fails when the lock file is missing" {
     }
   }
 }
-```
+````
 
 <a id="case-4-2-2-the-ci-workflow"></a>
 #### The CI workflow
 
 A normal `summon` writes the lock once; committing it makes the later frozen run pass.
 
-```reportage
+````reportage
+before_each {
+  write <"sources/demo-skill/SKILL.md"> ```
+    ---
+    name: demo-skill
+    description: demo skill for the frozen workflow
+    ---
+
+    # Demo Skill
+    ```
+  write <"enozunu.kdl"> ```
+    enozunu config-version=1 {
+      provider {
+        skills {
+          skill "demo-skill" {
+            local {
+              path "sources/demo-skill"
+            }
+          }
+        }
+      }
+      consumer {
+        claude {
+          use-skills "demo-skill"
+        }
+      }
+    }
+    ```
+}
+
 case "summon --frozen passes once a normal summon has written the lock" {
   $ enozunu summon
   assert {
@@ -510,4 +630,4 @@ case "summon --frozen passes once a normal summon has written the lock" {
     file <".claude/skills/demo-skill/SKILL.md"> exists
   }
 }
-```
+````

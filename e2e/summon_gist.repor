@@ -14,7 +14,7 @@
 # pieces live in this block. The `workspace` binding stays in scope for the
 # case bodies. The first two cases predate this block and still assemble the
 # same state with printf over the shared files, which is redundant but
-# harmless; rewriting them is deferred (issue #43, out of scope).
+# harmless.
 before_each {
   $ git init --quiet --initial-branch main gist-repo
   $ git -C gist-repo config user.email "e2e@example.com"

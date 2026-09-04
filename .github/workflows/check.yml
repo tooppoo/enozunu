@@ -36,12 +36,7 @@ jobs:
       # `just check` runs coverage-e2e (see just/coverage.just), which shells out
       # to the reportage CLI. Install it with the official setup action, pinned to
       # a commit SHA (it has no release tags yet) like the other third-party
-      # actions above. The CLI version is intentionally unpinned: this project
-      # always follows the latest reportage release, including its docs
-      # generation format. When a new release changes that format, examples-check
-      # fails; catch up by regenerating examples/README.md with `just
-      # examples-gen` on the latest CLI (the devcontainer feature also installs
-      # latest, so a rebuilt container matches CI).
+      # actions above.
       - uses: tooppoo/reportage-actions/setup@57256bb4c6a89429c4c37133d1619436921263e3 # main
 
       - name: just check

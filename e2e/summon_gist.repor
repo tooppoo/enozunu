@@ -7,6 +7,26 @@
 # rewrite. This keeps the test offline and deterministic while still driving the
 # actual git repository access that a fake transport cannot cover.
 
+# Shared setup replayed inside every case workspace: the empty local repository
+# standing in for the Gist, and the workspace-local git config redirecting the
+# gist remote to it. Each case commits its own artifact into `gist-repo`, so
+# the pinned revision cannot be captured here; only the commit-independent
+# pieces live in this block. The `workspace` binding stays in scope for the
+# case bodies. The first two cases predate this block and still assemble the
+# same state with printf over the shared files, which is redundant but
+# harmless; rewriting them is deferred (issue #43, out of scope).
+before_each {
+  $ git init --quiet --initial-branch main gist-repo
+  $ git -C gist-repo config user.email "e2e@example.com"
+  $ git -C gist-repo config user.name "e2e"
+  $ pwd
+  let workspace <- stdout_line
+  write <"fake-gitconfig"> &```
+    [url "file://&{workspace}/gist-repo"]
+      insteadOf = https://gist.github.com/2decf6c462d9b4418f2.git
+    ```
+}
+
 case "summon materializes the pinned gist revision, not the branch tip" {
   # A local repository standing in for the Gist: an older commit and a newer
   # HEAD, so pinning the older revision proves exact-revision resolution rather
@@ -104,26 +124,18 @@ case "summon reports a gist revision that does not exist" {
 # across kinds (issue #38), so a failure must be reported as the entry's actual
 # kind rather than a hard-coded `agent`.
 #
-# The workspace path and the pinned revision are captured as case-local
-# bindings and substituted into interpolated `write` literals, so the
-# gitconfig and the manifest are written declaratively rather than assembled
-# with shell redirection and sed.
+# The pinned revision is captured as a case-local binding — it only exists
+# once the case has committed its artifact — and substituted into the
+# interpolated manifest, so `enozunu.kdl` is written declaratively rather than
+# assembled with shell redirection and sed. The repository, the `workspace`
+# binding, and the gitconfig come from `before_each`.
 
 case "summon reports a gist file missing from the pinned revision" {
-  $ git init --quiet --initial-branch main gist-repo
-  $ git -C gist-repo config user.email "e2e@example.com"
-  $ git -C gist-repo config user.name "e2e"
   $ printf '# shell reviewer\n' > gist-repo/agent.md
   $ git -C gist-repo add agent.md
   $ git -C gist-repo commit --quiet -m only
-  $ pwd
-  let workspace <- stdout_line
   $ git -C gist-repo rev-parse HEAD
   let rev <- stdout_line
-  write <"fake-gitconfig"> &```
-    [url "file://&{workspace}/gist-repo"]
-      insteadOf = https://gist.github.com/2decf6c462d9b4418f2.git
-    ```
   write <"enozunu.kdl"> &```
     enozunu config-version=1 {
       provider {
@@ -166,23 +178,14 @@ case "summon reports a gist file missing from the pinned revision" {
 }
 
 case "summon reports a gist file that is a directory" {
-  $ git init --quiet --initial-branch main gist-repo
-  $ git -C gist-repo config user.email "e2e@example.com"
-  $ git -C gist-repo config user.name "e2e"
   # Git tracks only files, so the directory-shaped `dir.md` is committed through
   # a file inside it.
   $ mkdir -p gist-repo/dir.md
   $ printf 'inner\n' > gist-repo/dir.md/inner.txt
   $ git -C gist-repo add dir.md
   $ git -C gist-repo commit --quiet -m dir
-  $ pwd
-  let workspace <- stdout_line
   $ git -C gist-repo rev-parse HEAD
   let rev <- stdout_line
-  write <"fake-gitconfig"> &```
-    [url "file://&{workspace}/gist-repo"]
-      insteadOf = https://gist.github.com/2decf6c462d9b4418f2.git
-    ```
   write <"enozunu.kdl"> &```
     enozunu config-version=1 {
       provider {
@@ -226,9 +229,6 @@ case "summon reports a gist file that is a directory" {
 }
 
 case "summon reports a gist file escaping the resolved revision" {
-  $ git init --quiet --initial-branch main gist-repo
-  $ git -C gist-repo config user.email "e2e@example.com"
-  $ git -C gist-repo config user.name "e2e"
   # A committed symlink whose target lies outside the exported content: the
   # workspace-absolute target exists during the run, so path canonicalization
   # succeeds and the containment check is what rejects it.
@@ -236,14 +236,8 @@ case "summon reports a gist file escaping the resolved revision" {
   $ ln -s "$PWD/outside.txt" gist-repo/escape.md
   $ git -C gist-repo add escape.md
   $ git -C gist-repo commit --quiet -m escape
-  $ pwd
-  let workspace <- stdout_line
   $ git -C gist-repo rev-parse HEAD
   let rev <- stdout_line
-  write <"fake-gitconfig"> &```
-    [url "file://&{workspace}/gist-repo"]
-      insteadOf = https://gist.github.com/2decf6c462d9b4418f2.git
-    ```
   write <"enozunu.kdl"> &```
     enozunu config-version=1 {
       provider {

@@ -29,6 +29,19 @@ enum Command {
         #[arg(long, default_value = ".")]
         project_root: PathBuf,
     },
+    /// Add a Skill source declaration to the manifest.
+    AddSkill {
+        /// Name to declare the Skill source under.
+        skill_id: String,
+        /// Skill source: a path to a local Skill directory containing SKILL.md.
+        source: String,
+        /// Path to the manifest. Defaults to enozunu.kdl in the project root.
+        #[arg(long)]
+        manifest: Option<PathBuf>,
+        /// Project root directory. Defaults to the current directory.
+        #[arg(long, default_value = ".")]
+        project_root: PathBuf,
+    },
     /// Parse and validate the manifest without materializing anything.
     Validate {
         /// Path to the manifest. Defaults to enozunu.kdl in the project root.
@@ -71,6 +84,40 @@ fn main() -> ExitCode {
                     println!("created {}", manifest_path.display());
                 })
                 .map_err(|d| vec![d])
+        }
+        Command::AddSkill {
+            skill_id,
+            source,
+            manifest,
+            project_root,
+        } => {
+            let manifest_path = manifest.unwrap_or_else(|| project_root.join(MANIFEST_FILE_NAME));
+            std::env::current_dir()
+                .map_err(|e| {
+                    vec![Diagnostic::new(
+                        enozunu::diagnostics::DiagnosticCode::Io,
+                        format!("failed to resolve the current directory: {e}"),
+                    )]
+                })
+                .and_then(|cwd| {
+                    enozunu::add_skill::run_add_skill(&manifest_path, &skill_id, &source, &cwd)
+                })
+                .map(|outcome| match outcome {
+                    enozunu::add_skill::AddSkillOutcome::Added {
+                        manifest_relative_path,
+                    } => {
+                        println!(
+                            "added skill `{skill_id}` (local: {manifest_relative_path}) to {}",
+                            manifest_path.display()
+                        );
+                    }
+                    enozunu::add_skill::AddSkillOutcome::AlreadyDeclared => {
+                        println!(
+                            "skill `{skill_id}` is already declared with the same source; {} is unchanged",
+                            manifest_path.display()
+                        );
+                    }
+                })
         }
         Command::Validate {
             manifest,

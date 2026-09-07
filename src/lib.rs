@@ -2,6 +2,7 @@
 //!
 //! The pipeline is: parse and validate the manifest, plan target paths, resolve Git and local sources, check every artifact, then write outputs, the provenance record, and the lock file.
 
+pub mod add_skill;
 pub mod diagnostics;
 pub mod gist;
 pub mod git;

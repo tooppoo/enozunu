@@ -50,6 +50,22 @@ pub fn run_add_skill(
         )]);
     }
 
+    // The atomic replace renames over `manifest_path`, which would sever a symlink and fork
+    // the configuration between the link and its old target; symlinked manifests are refused
+    // outright, matching how symlinked sources are treated everywhere else.
+    if manifest_path
+        .symlink_metadata()
+        .is_ok_and(|m| m.is_symlink())
+    {
+        return Err(vec![Diagnostic::new(
+            DiagnosticCode::UnsafePath,
+            format!(
+                "{} is a symlink; refusing to edit it because replacing the manifest would sever the link; run add-skill against the real file",
+                manifest_path.display()
+            ),
+        )]);
+    }
+
     let text = std::fs::read_to_string(manifest_path).map_err(|e| {
         vec![Diagnostic::new(
             DiagnosticCode::Io,
@@ -258,14 +274,24 @@ fn child_mut<'a>(parent: &'a mut KdlNode, name: &str) -> Option<&'a mut KdlNode>
         .find(|n| n.name().value() == name)
 }
 
-/// The indentation for children of `parent`: the parent's own indentation plus one level.
+/// The indentation of `node` itself: what follows the last newline of its leading trivia.
+fn own_indent(node: &KdlNode) -> String {
+    let leading = node.format().map(|f| f.leading.as_str()).unwrap_or("");
+    leading.rsplit('\n').next().unwrap_or("").to_owned()
+}
+
+/// The indentation for children of `parent`.
 ///
-/// The parent's indentation is what follows the last newline of its leading trivia, so a
-/// created block lines up with however the surrounding manifest happens to be indented.
+/// An existing first child's own indentation wins, so an inserted node lines up with its
+/// siblings whatever the manifest's indent style; a block without indented children falls
+/// back to the parent's own indentation plus one two-space level.
 fn child_indent(parent: &KdlNode) -> String {
-    let leading = parent.format().map(|f| f.leading.as_str()).unwrap_or("");
-    let own = leading.rsplit('\n').next().unwrap_or("");
-    format!("{own}  ")
+    parent
+        .children()
+        .and_then(|children| children.nodes().first())
+        .map(own_indent)
+        .filter(|indent| !indent.is_empty())
+        .unwrap_or_else(|| format!("{}  ", own_indent(parent)))
 }
 
 /// Inserts `node` as the first child of `parent`.
@@ -308,7 +334,7 @@ fn append_back(parent: &mut KdlNode, mut node: KdlNode, indent: &str) {
     {
         fmt.before_children = " ".to_owned();
     }
-    let close_indent = indent.strip_suffix("  ").unwrap_or("").to_owned();
+    let close_indent = own_indent(parent);
     let children = parent.ensure_children();
     let first = children.nodes().is_empty();
     let fmt = node.format_mut().expect("parsed nodes carry format");
@@ -620,6 +646,59 @@ enozunu config-version=1 {
 
         assert_eq!(diags[0].code, DiagnosticCode::DuplicateSourceName);
         assert_eq!(fs::read_to_string(&manifest_path).unwrap(), BASE_MANIFEST);
+    }
+
+    #[test]
+    fn existing_git_source_under_the_same_id_is_a_conflict() {
+        let tmp = tempfile::tempdir().unwrap();
+        let manifest_path = tmp.path().join("enozunu.kdl");
+        let manifest = "enozunu config-version=1 {\n  provider {\n    skills {\n      skill \"review\" {\n        git {\n          url \"https://github.com/example/repo\"\n          branch \"main\"\n          path \"skills/review\"\n        }\n      }\n    }\n  }\n  consumer {\n    claude {\n    }\n  }\n}\n";
+        fs::write(&manifest_path, manifest).unwrap();
+        write_skill_dir(tmp.path(), "skills/review");
+
+        let diags =
+            run_add_skill(&manifest_path, "review", "skills/review", tmp.path()).unwrap_err();
+
+        assert_eq!(diags[0].code, DiagnosticCode::DuplicateSourceName);
+        assert_eq!(fs::read_to_string(&manifest_path).unwrap(), manifest);
+    }
+
+    #[test]
+    fn appended_skill_follows_the_siblings_indent_style() {
+        let tmp = tempfile::tempdir().unwrap();
+        let manifest_path = tmp.path().join("enozunu.kdl");
+        // A four-space-indented manifest: the appended sibling must line up with the
+        // existing one instead of assuming the two-space house style.
+        let manifest = "enozunu config-version=1 {\n    provider {\n        skills {\n            skill \"existing\" {\n                local {\n                    path \"skills/existing\"\n                }\n            }\n        }\n    }\n    consumer {\n        claude {\n        }\n    }\n}\n";
+        fs::write(&manifest_path, manifest).unwrap();
+        write_skill_dir(tmp.path(), "skills/existing");
+        write_skill_dir(tmp.path(), "skills/review");
+
+        run_add_skill(&manifest_path, "review", "skills/review", tmp.path()).unwrap();
+
+        let written = fs::read_to_string(&manifest_path).unwrap();
+        assert!(
+            written.contains("\n            skill \"review\" {\n"),
+            "appended skill should sit at the sibling's twelve-space indent:\n{written}"
+        );
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn symlinked_manifest_path_is_rejected_without_a_write() {
+        let tmp = tempfile::tempdir().unwrap();
+        let real_path = tmp.path().join("real.kdl");
+        fs::write(&real_path, BASE_MANIFEST).unwrap();
+        let manifest_path = tmp.path().join("enozunu.kdl");
+        std::os::unix::fs::symlink(&real_path, &manifest_path).unwrap();
+        write_skill_dir(tmp.path(), "skills/review");
+
+        let diags =
+            run_add_skill(&manifest_path, "review", "skills/review", tmp.path()).unwrap_err();
+
+        assert_eq!(diags[0].code, DiagnosticCode::UnsafePath);
+        assert!(manifest_path.symlink_metadata().unwrap().is_symlink());
+        assert_eq!(fs::read_to_string(&real_path).unwrap(), BASE_MANIFEST);
     }
 
     #[test]

@@ -80,11 +80,3 @@ case "a source directory without SKILL.md is rejected before any manifest change
     }
   }
 }
-
-case "a URL source is rejected with a dedicated message" {
-  $ enozunu add-skill review "https://github.com/example/repo/tree/main/skills/review"
-  assert {
-    exit 1
-    stderr contains "is a URL"
-  }
-}

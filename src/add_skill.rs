@@ -152,7 +152,8 @@ pub fn run_add_skill(
 }
 
 /// Verifies the Skill source contract before any manifest change: an existing, non-symlink
-/// directory containing a regular-file `SKILL.md`, matching what `summon` will later check.
+/// directory containing a regular-file `SKILL.md` and no symlinks anywhere in its tree,
+/// matching what `summon` will later check.
 fn check_skill_directory(abs: &Path, skill_id: &str, input: &str) -> Result<(), Vec<Diagnostic>> {
     let metadata = abs.symlink_metadata().map_err(|_| {
         vec![Diagnostic::new(
@@ -178,7 +179,16 @@ fn check_skill_directory(abs: &Path, skill_id: &str, input: &str) -> Result<(), 
             ),
         )]);
     }
-    if !abs.join("SKILL.md").is_file() {
+    // The same tree walk summon runs later, so a symlink anywhere in the source — including a
+    // symlinked SKILL.md — is rejected now instead of surfacing at materialization time.
+    crate::materialize::reject_symlinks(abs, skill_id).map_err(|d| vec![d])?;
+    // `symlink_metadata`, not `is_file`: the walk above already rejected a symlinked SKILL.md,
+    // and this check must not follow links when judging what the directory itself contains.
+    if !abs
+        .join("SKILL.md")
+        .symlink_metadata()
+        .is_ok_and(|m| m.is_file())
+    {
         return Err(vec![Diagnostic::new(
             DiagnosticCode::ArtifactShape,
             format!("skill `{skill_id}`: source path `{input}` does not contain SKILL.md"),
@@ -742,6 +752,30 @@ enozunu config-version=1 {
         let diags = run_add_skill(&manifest_path, "review", "review", tmp.path()).unwrap_err();
 
         assert_eq!(diags[0].code, DiagnosticCode::UnsafePath);
+    }
+
+    #[test]
+    #[cfg(unix)]
+    fn symlink_inside_the_source_directory_is_rejected() {
+        let tmp = tempfile::tempdir().unwrap();
+        let manifest_path = tmp.path().join("enozunu.kdl");
+        fs::write(&manifest_path, BASE_MANIFEST).unwrap();
+        // The directory itself is real, but SKILL.md is a symlink to a real file —
+        // exactly what summon's tree walk would reject at materialization time.
+        fs::write(tmp.path().join("real-skill.md"), "# skill\n").unwrap();
+        fs::create_dir_all(tmp.path().join("skills/review")).unwrap();
+        std::os::unix::fs::symlink(
+            tmp.path().join("real-skill.md"),
+            tmp.path().join("skills/review/SKILL.md"),
+        )
+        .unwrap();
+
+        let diags =
+            run_add_skill(&manifest_path, "review", "skills/review", tmp.path()).unwrap_err();
+
+        assert_eq!(diags[0].code, DiagnosticCode::UnsafePath);
+        assert!(diags[0].message.contains("contains a symlink"));
+        assert_eq!(fs::read_to_string(&manifest_path).unwrap(), BASE_MANIFEST);
     }
 
     #[test]

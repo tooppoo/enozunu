@@ -75,6 +75,14 @@ pub fn parse_github_skill_url(url: &str) -> Result<ParsedGithubUrl, Diagnostic> 
         )));
     }
 
+    // A valid GitHub tree/blob URL never contains a backslash, and letting one through would
+    // hand `Path::join` a Windows separator later, bypassing the `/`-based path validation.
+    if rest.contains('\\') {
+        return Err(unsupported(format!(
+            "skill source URL `{url}` contains a backslash; expected a GitHub tree/blob URL with `/` separators"
+        )));
+    }
+
     let segments: Vec<&str> = rest.trim_end_matches('/').split('/').collect();
     if segments.len() < 4 || segments[..2].iter().any(|s| s.is_empty()) {
         return Err(unsupported(format!(
@@ -159,13 +167,15 @@ pub fn resolve_boundary(
         }
         0 => {
             let joined = segments.join("/");
-            // The whole remainder naming a ref is a real situation with its own cause: the URL
-            // points at the Skill repository's root for that ref, and a Skill path is missing.
+            // The whole remainder naming a ref — an advertised branch or tag, or a lone full
+            // commit id — is a real situation with its own cause: the URL points at the Skill
+            // repository's root for that ref, and a Skill path is missing.
             let full = refs
                 .branches
                 .iter()
                 .chain(refs.tags.iter())
-                .any(|r| *r == joined);
+                .any(|r| *r == joined)
+                || (segments.len() == 1 && CommitSha::parse(&segments[0]).is_some());
             let message = if full {
                 format!(
                     "URL resolves `{joined}` to a ref of `{}` with no Skill path after it; the URL must point at the Skill directory, not the repository root",
@@ -194,7 +204,8 @@ pub fn resolve_boundary(
             Err(Diagnostic::new(
                 DiagnosticCode::GitResolution,
                 format!(
-                    "URL `{}` is ambiguous: it reads as {}; rename the colliding refs or declare the source in the manifest directly",
+                    "`{}` under `{}` is ambiguous: it reads as {}; rename the colliding refs or declare the source in the manifest directly",
+                    segments.join("/"),
                     parsed.repo_url,
                     readings.join(" or ")
                 ),
@@ -332,6 +343,27 @@ mod tests {
         let diag = resolve_boundary(&parsed, &refs(&[sha], &[])).unwrap_err();
         assert_eq!(diag.code, DiagnosticCode::GitResolution);
         assert!(diag.message.contains("ambiguous"), "{}", diag.message);
+    }
+
+    #[test]
+    fn rejects_a_backslash_anywhere_in_the_url() {
+        let diag = parse_github_skill_url("https://github.com/example/repo/tree/main/..\\..\\x")
+            .unwrap_err();
+        assert_eq!(diag.code, DiagnosticCode::UnsupportedSourceReference);
+        assert!(diag.message.contains("backslash"), "{}", diag.message);
+    }
+
+    #[test]
+    fn rejects_a_lone_commit_id_as_a_repository_root() {
+        let sha = "468aac8caed5f0c3b859b8286968e2c78e2b8760";
+        let parsed = parse(&format!("https://github.com/example/repo/tree/{sha}"));
+        let diag = resolve_boundary(&parsed, &refs(&["main"], &[])).unwrap_err();
+        assert_eq!(diag.code, DiagnosticCode::GitResolution);
+        assert!(
+            diag.message.contains("not the repository root"),
+            "{}",
+            diag.message
+        );
     }
 
     #[test]

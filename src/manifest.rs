@@ -1600,7 +1600,7 @@ fn validate_references(manifest: &Manifest, diags: &mut Vec<Diagnostic>) {
 }
 
 /// Source names become path segments under `.claude/`, so they must be single safe segments.
-fn validate_name(name: &str, kind: &str) -> Result<(), Diagnostic> {
+pub(crate) fn validate_name(name: &str, kind: &str) -> Result<(), Diagnostic> {
     let safe = !name.is_empty()
         && name != "."
         && name != ".."
@@ -1621,7 +1621,11 @@ fn validate_name(name: &str, kind: &str) -> Result<(), Diagnostic> {
 
 /// Local paths resolve from the manifest directory, so `..` segments are allowed for sibling repositories.
 /// Absolute paths are a portability hazard in a shared manifest, so v0.0.x rejects them until support is decided explicitly.
-fn validate_local_source_path(path: &str, kind: &str, name: &str) -> Result<(), Diagnostic> {
+pub(crate) fn validate_local_source_path(
+    path: &str,
+    kind: &str,
+    name: &str,
+) -> Result<(), Diagnostic> {
     // The manifest is shared across hosts, so Windows-style absolute forms (drive letter, `\` root, UNC) are rejected on every platform, not only where `Path::is_absolute` recognizes them.
     let absolute_like = path.starts_with('/')
         || path.starts_with('\\')

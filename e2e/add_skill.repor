@@ -1,0 +1,82 @@
+# E2E: `enozunu add-skill` appends a local Skill source to the manifest and
+# leaves it untouched on no-op and error paths.
+
+before_each {
+  write <"enozunu.kdl"> ```
+    enozunu config-version=1 {
+      consumer {
+        claude {
+        }
+      }
+    }
+    ```
+  write <"skills/review/SKILL.md"> "# review skill"
+}
+
+case "add-skill records a local source, creating the provider and skills blocks" {
+  $ enozunu add-skill review skills/review
+  assert {
+    exit 0
+    stdout contains "added skill `review` (local: skills/review)"
+    # The whole manifest is pinned: the command must create the missing blocks
+    # with conventional indentation while leaving the consumer block untouched.
+    file <"enozunu.kdl"> text_equals ```
+      enozunu config-version=1 {
+        provider {
+          skills {
+            skill "review" {
+              local {
+                path "skills/review"
+              }
+            }
+          }
+        }
+        consumer {
+          claude {
+          }
+        }
+      }
+      ```
+  }
+}
+
+case "a manifest written by add-skill passes validate" {
+  $ enozunu add-skill review skills/review
+  $ enozunu validate
+  assert {
+    exit 0
+    stdout contains "is valid"
+  }
+}
+
+case "re-adding the same skill and source is a no-op" {
+  $ enozunu add-skill review skills/review
+  $ enozunu add-skill review skills/review
+  assert {
+    exit 0
+    stdout contains "already declared with the same source"
+  }
+}
+
+case "adding an existing skill with a different source is an error" {
+  write <"elsewhere/review/SKILL.md"> "# another review skill"
+  $ enozunu add-skill review skills/review
+  $ enozunu add-skill review elsewhere/review
+  assert {
+    exit 1
+    stderr contains "already declared with a different source"
+  }
+}
+
+case "a source directory without SKILL.md is rejected before any manifest change" {
+  write <"skills/broken/README.md"> "not a skill"
+  $ enozunu add-skill broken skills/broken
+  assert {
+    exit 1
+    stderr contains "does not contain SKILL.md"
+    # The manifest still has no provider block, so nothing was written.
+    not {
+      file <"enozunu.kdl"> contains "provider"
+    }
+  }
+}

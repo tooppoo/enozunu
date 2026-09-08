@@ -68,6 +68,33 @@ case "adding an existing skill with a different source is an error" {
   }
 }
 
+case "a URL outside github.com tree/blob forms is rejected without touching the manifest" {
+  $ enozunu add-skill review "https://gitlab.com/example/repo/tree/main/skills/review"
+  assert {
+    exit 1
+    stderr contains "is not supported"
+    not {
+      file <"enozunu.kdl"> contains "provider"
+    }
+  }
+}
+
+case "a repository root URL is rejected" {
+  $ enozunu add-skill review "https://github.com/example/repo"
+  assert {
+    exit 1
+    stderr contains "points at a repository or profile"
+  }
+}
+
+case "a blob URL not pointing at SKILL.md is rejected" {
+  $ enozunu add-skill review "https://github.com/example/repo/blob/main/skills/review/README.md"
+  assert {
+    exit 1
+    stderr contains "must point at the Skill's SKILL.md"
+  }
+}
+
 case "a source directory without SKILL.md is rejected before any manifest change" {
   write <"skills/broken/README.md"> "not a skill"
   $ enozunu add-skill broken skills/broken

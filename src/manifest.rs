@@ -1651,7 +1651,7 @@ pub(crate) fn validate_local_source_path(
 }
 
 /// Dot segments are rejected rather than normalized so that path containment does not depend on host-specific normalization.
-fn validate_source_path(path: &str, kind: &str, name: &str) -> Result<(), Diagnostic> {
+pub(crate) fn validate_source_path(path: &str, kind: &str, name: &str) -> Result<(), Diagnostic> {
     let invalid = path.is_empty()
         || path.starts_with('/')
         || path.split('/').any(|seg| seg.is_empty() || seg == "..");

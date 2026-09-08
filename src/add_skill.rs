@@ -12,18 +12,83 @@ use std::path::{Path, PathBuf};
 use kdl::{KdlDocument, KdlDocumentFormat, KdlNode};
 
 use crate::diagnostics::{Diagnostic, DiagnosticCode};
+use crate::git::{GitRefLister, GitResolutionRequest, GitResolver};
+use crate::github_url::{GitSourceSpec, parse_github_skill_url, resolve_boundary};
 use crate::manifest::{self, SourceReference};
 
 /// What `add-skill` did to the manifest.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum AddSkillOutcome {
     /// The declaration was appended and the manifest was replaced atomically.
-    Added {
+    Added(AddedSource),
+    /// The manifest already declares this Skill with the same source; nothing was written.
+    AlreadyDeclared,
+    /// The user declined the confirmation; nothing was written.
+    Aborted,
+}
+
+/// The source reference `add-skill` recorded, reported back for CLI output.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AddedSource {
+    Local {
         /// The recorded `local.path`, relative to the manifest directory.
         manifest_relative_path: String,
     },
-    /// The manifest already declares this Skill with the same source; nothing was written.
-    AlreadyDeclared,
+    Git(GitSourceSpec),
+}
+
+impl AddedSource {
+    /// Renders the recorded reference for CLI output, keeping each source kind identifiable.
+    pub fn describe(&self) -> String {
+        match self {
+            AddedSource::Local {
+                manifest_relative_path,
+            } => format!("local: {manifest_relative_path}"),
+            AddedSource::Git(spec) => {
+                let (selector_field, selector_value) = spec.selector_field();
+                format!(
+                    "git: {} {selector_field} {selector_value}, path {}",
+                    spec.url, spec.path
+                )
+            }
+        }
+    }
+}
+
+/// Prints the exact values a Git source confirmation is about (issue #71's confirmation
+/// display) and reads one line's answer; only an explicit `y` / `yes` proceeds.
+///
+/// The streams are parameters so the prompt logic is testable without a terminal; the CLI
+/// passes stdin and stdout.
+pub fn prompt_git_source_confirmation(
+    input: &mut dyn std::io::BufRead,
+    output: &mut dyn std::io::Write,
+    skill_id: &str,
+    manifest_path: &Path,
+    spec: &GitSourceSpec,
+) -> Result<bool, Diagnostic> {
+    let io_diag = |e: std::io::Error| {
+        Diagnostic::new(
+            DiagnosticCode::Io,
+            format!("failed to confirm the source: {e}"),
+        )
+    };
+    let (selector_field, selector_value) = spec.selector_field();
+    write!(
+        output,
+        "skill-id: {skill_id}\nurl: {}\n{selector_field}: {selector_value}\npath: {}\nadd this Skill source to {}? [y/N] ",
+        spec.url,
+        spec.path,
+        manifest_path.display()
+    )
+    .map_err(io_diag)?;
+    output.flush().map_err(io_diag)?;
+    let mut answer = String::new();
+    input.read_line(&mut answer).map_err(io_diag)?;
+    Ok(matches!(
+        answer.trim().to_ascii_lowercase().as_str(),
+        "y" | "yes"
+    ))
 }
 
 /// Adds a local Skill source to the manifest at `manifest_path`.
@@ -39,42 +104,18 @@ pub fn run_add_skill(
 ) -> Result<AddSkillOutcome, Vec<Diagnostic>> {
     manifest::validate_name(skill_id, "skill").map_err(|d| vec![d])?;
 
-    // A URL is a plausible Skill source (issue #71 plans GitHub URL support), so it gets a
+    // URL sources go through `run_add_skill_from_url`; a URL reaching this flow gets a
     // deliberate rejection instead of the misleading "path does not exist" a lookup would give.
     if source.starts_with("http://") || source.starts_with("https://") {
         return Err(vec![Diagnostic::new(
             DiagnosticCode::UnsupportedSourceReference,
             format!(
-                "skill source `{source}` is a URL; add-skill accepts only a local Skill directory path"
+                "skill source `{source}` is a URL; this flow accepts only a local Skill directory path"
             ),
         )]);
     }
 
-    // The atomic replace renames over `manifest_path`, which would sever a symlink and fork
-    // the configuration between the link and its old target; symlinked manifests are refused
-    // outright, matching how symlinked sources are treated everywhere else.
-    if manifest_path
-        .symlink_metadata()
-        .is_ok_and(|m| m.is_symlink())
-    {
-        return Err(vec![Diagnostic::new(
-            DiagnosticCode::UnsafePath,
-            format!(
-                "{} is a symlink; refusing to edit it because replacing the manifest would sever the link; run add-skill against the real file",
-                manifest_path.display()
-            ),
-        )]);
-    }
-
-    let text = std::fs::read_to_string(manifest_path).map_err(|e| {
-        vec![Diagnostic::new(
-            DiagnosticCode::Io,
-            format!("failed to read {}: {e}", manifest_path.display()),
-        )]
-    })?;
-    // The pre-edit manifest must satisfy the ordinary parse rules; editing around an invalid
-    // manifest could entrench the very declarations validation rejects.
-    let parsed = manifest::parse(&text)?;
+    let (text, parsed) = load_manifest_for_edit(manifest_path)?;
 
     let source_abs = if Path::new(source).is_absolute() {
         PathBuf::from(source)
@@ -115,22 +156,144 @@ pub fn run_add_skill(
         return if same_local_source(&existing.reference, &rel_path, &manifest_dir_canon) {
             Ok(AddSkillOutcome::AlreadyDeclared)
         } else {
-            Err(vec![Diagnostic::new(
-                DiagnosticCode::DuplicateSourceName,
-                format!(
-                    "skill `{skill_id}` is already declared with a different source; edit {} directly if you mean to replace it",
-                    manifest_path.display()
-                ),
-            )])
+            Err(conflict_error(skill_id, manifest_path))
         };
     }
 
-    // The domain `Manifest` is lossy (comments, order, formatting), so the edit works on a
-    // fresh KDL syntax tree of the same text, which round-trips everything it does not touch.
+    commit_skill_edit(
+        manifest_path,
+        &text,
+        skill_id,
+        &NewReference::Local { path: &rel_path },
+    )?;
+    Ok(AddSkillOutcome::Added(AddedSource::Local {
+        manifest_relative_path: rel_path,
+    }))
+}
+
+/// Adds a Git Skill source resolved from a GitHub tree/blob URL.
+///
+/// The URL's ref/path boundary is resolved against the remote's advertised refs, the resolved
+/// source is checked against the Skill source contract, and `confirm` is asked with the exact
+/// values to record before the manifest changes. Declining leaves the manifest untouched, as
+/// does every error path. The lock file is neither read nor written: branch and tag lock
+/// semantics stay entirely with `summon`.
+pub fn run_add_skill_from_url(
+    manifest_path: &Path,
+    skill_id: &str,
+    url: &str,
+    ref_lister: &dyn GitRefLister,
+    resolver: &dyn GitResolver,
+    confirm: &mut dyn FnMut(&GitSourceSpec) -> Result<bool, Diagnostic>,
+) -> Result<AddSkillOutcome, Vec<Diagnostic>> {
+    manifest::validate_name(skill_id, "skill").map_err(|d| vec![d])?;
+    let (text, parsed) = load_manifest_for_edit(manifest_path)?;
+
+    let parsed_url = parse_github_skill_url(url).map_err(|d| vec![d])?;
+    let refs = ref_lister
+        .list_refs(&parsed_url.repo_url)
+        .map_err(|e| vec![crate::git_error_diagnostic(e)])?;
+    let spec = resolve_boundary(&parsed_url, &refs).map_err(|d| vec![d])?;
+    manifest::validate_source_path(&spec.path, "skill", skill_id).map_err(|d| vec![d])?;
+
+    if let Some(existing) = parsed.provider.skills.iter().find(|d| d.name == skill_id) {
+        let same = existing.reference
+            == SourceReference::Git {
+                url: spec.url.clone(),
+                selector: spec.selector.clone(),
+                path: spec.path.clone(),
+            };
+        return if same {
+            Ok(AddSkillOutcome::AlreadyDeclared)
+        } else {
+            Err(conflict_error(skill_id, manifest_path))
+        };
+    }
+
+    // The resolved commit's content must satisfy the Skill source contract before the user is
+    // even asked; a confirmation for a source summon would reject helps nobody.
+    let resolved = resolver
+        .resolve(&GitResolutionRequest {
+            url: spec.url.clone(),
+            selector: spec.selector.clone(),
+        })
+        .map_err(|e| vec![crate::git_error_diagnostic(e)])?;
+    check_skill_directory(
+        &resolved.content_root.join(&spec.path),
+        skill_id,
+        &spec.path,
+    )?;
+
+    if !confirm(&spec).map_err(|d| vec![d])? {
+        return Ok(AddSkillOutcome::Aborted);
+    }
+
+    commit_skill_edit(
+        manifest_path,
+        &text,
+        skill_id,
+        &NewReference::Git { spec: &spec },
+    )?;
+    Ok(AddSkillOutcome::Added(AddedSource::Git(spec)))
+}
+
+/// Reads and parses the manifest, refusing a symlinked manifest path.
+///
+/// The atomic replace renames over `manifest_path`, which would sever a symlink and fork the
+/// configuration between the link and its old target; symlinked manifests are refused
+/// outright, matching how symlinked sources are treated everywhere else. The pre-edit
+/// manifest must satisfy the ordinary parse rules; editing around an invalid manifest could
+/// entrench the very declarations validation rejects.
+fn load_manifest_for_edit(
+    manifest_path: &Path,
+) -> Result<(String, manifest::Manifest), Vec<Diagnostic>> {
+    if manifest_path
+        .symlink_metadata()
+        .is_ok_and(|m| m.is_symlink())
+    {
+        return Err(vec![Diagnostic::new(
+            DiagnosticCode::UnsafePath,
+            format!(
+                "{} is a symlink; refusing to edit it because replacing the manifest would sever the link; run add-skill against the real file",
+                manifest_path.display()
+            ),
+        )]);
+    }
+
+    let text = std::fs::read_to_string(manifest_path).map_err(|e| {
+        vec![Diagnostic::new(
+            DiagnosticCode::Io,
+            format!("failed to read {}: {e}", manifest_path.display()),
+        )]
+    })?;
+    let parsed = manifest::parse(&text)?;
+    Ok((text, parsed))
+}
+
+fn conflict_error(skill_id: &str, manifest_path: &Path) -> Vec<Diagnostic> {
+    vec![Diagnostic::new(
+        DiagnosticCode::DuplicateSourceName,
+        format!(
+            "skill `{skill_id}` is already declared with a different source; edit {} directly if you mean to replace it",
+            manifest_path.display()
+        ),
+    )]
+}
+
+/// Inserts the declaration into a fresh syntax tree, re-validates, and replaces atomically.
+///
+/// The domain `Manifest` is lossy (comments, order, formatting), so the edit works on a fresh
+/// KDL syntax tree of the same text, which round-trips everything it does not touch.
+fn commit_skill_edit(
+    manifest_path: &Path,
+    text: &str,
+    skill_id: &str,
+    reference: &NewReference<'_>,
+) -> Result<(), Vec<Diagnostic>> {
     let mut doc: KdlDocument = text
         .parse()
         .expect("text already parsed successfully via manifest::parse");
-    insert_skill(&mut doc, skill_id, &rel_path);
+    insert_skill(&mut doc, skill_id, reference);
 
     let candidate = doc.to_string();
     if let Err(mut inner) = manifest::parse(&candidate) {
@@ -145,10 +308,13 @@ pub fn run_add_skill(
         return Err(diags);
     }
 
-    write_atomic(manifest_path, &candidate)?;
-    Ok(AddSkillOutcome::Added {
-        manifest_relative_path: rel_path,
-    })
+    write_atomic(manifest_path, &candidate)
+}
+
+/// The source reference block a new `skill` declaration will carry.
+enum NewReference<'a> {
+    Local { path: &'a str },
+    Git { spec: &'a GitSourceSpec },
 }
 
 /// Verifies the Skill source contract before any manifest change: an existing, non-symlink
@@ -251,26 +417,26 @@ fn relative_path(from: &Path, to: &Path) -> Option<String> {
 /// A created block is placed first among its siblings, matching the conventional manifest
 /// order (`provider` before `consumer`, `skills` first under `provider`); the skill itself
 /// appends to the end of an existing `skills` block.
-fn insert_skill(doc: &mut KdlDocument, skill_id: &str, rel_path: &str) {
+fn insert_skill(doc: &mut KdlDocument, skill_id: &str, reference: &NewReference<'_>) {
     // `manifest::parse` succeeded, so the document has exactly one root node.
     let root = &mut doc.nodes_mut()[0];
 
     let Some(provider) = child_mut(root, "provider") else {
         let indent = child_indent(root);
-        let snippet = provider_snippet(skill_id, rel_path, &indent);
+        let snippet = provider_snippet(skill_id, reference, &indent);
         insert_front(root, parse_snippet_node(&snippet), &indent);
         return;
     };
 
     let Some(skills) = child_mut(provider, "skills") else {
         let indent = child_indent(provider);
-        let snippet = skills_snippet(skill_id, rel_path, &indent);
+        let snippet = skills_snippet(skill_id, reference, &indent);
         insert_front(provider, parse_snippet_node(&snippet), &indent);
         return;
     };
 
     let indent = child_indent(skills);
-    let snippet = skill_snippet(skill_id, rel_path, &indent);
+    let snippet = skill_snippet(skill_id, reference, &indent);
     append_back(skills, parse_snippet_node(&snippet), &indent);
 }
 
@@ -392,27 +558,45 @@ fn kdl_string(value: &str) -> String {
     out
 }
 
-fn skill_snippet(skill_id: &str, rel_path: &str, indent: &str) -> String {
-    format!(
-        "skill {id} {{\n{indent}  local {{\n{indent}    path {path}\n{indent}  }}\n{indent}}}",
+fn skill_snippet(skill_id: &str, reference: &NewReference<'_>, indent: &str) -> String {
+    let (block, fields): (&str, Vec<(&str, &str)>) = match reference {
+        NewReference::Local { path } => ("local", vec![("path", path)]),
+        NewReference::Git { spec } => {
+            let (selector_field, selector_value) = spec.selector_field();
+            (
+                "git",
+                vec![
+                    ("url", spec.url.as_str()),
+                    (selector_field, selector_value),
+                    ("path", spec.path.as_str()),
+                ],
+            )
+        }
+    };
+    let mut snippet = format!(
+        "skill {id} {{\n{indent}  {block} {{\n",
         id = kdl_string(skill_id),
-        path = kdl_string(rel_path),
-    )
+    );
+    for (field, value) in fields {
+        snippet.push_str(&format!("{indent}    {field} {}\n", kdl_string(value)));
+    }
+    snippet.push_str(&format!("{indent}  }}\n{indent}}}"));
+    snippet
 }
 
-fn skills_snippet(skill_id: &str, rel_path: &str, indent: &str) -> String {
+fn skills_snippet(skill_id: &str, reference: &NewReference<'_>, indent: &str) -> String {
     let inner = format!("{indent}  ");
     format!(
         "skills {{\n{inner}{skill}\n{indent}}}",
-        skill = skill_snippet(skill_id, rel_path, &inner),
+        skill = skill_snippet(skill_id, reference, &inner),
     )
 }
 
-fn provider_snippet(skill_id: &str, rel_path: &str, indent: &str) -> String {
+fn provider_snippet(skill_id: &str, reference: &NewReference<'_>, indent: &str) -> String {
     let inner = format!("{indent}  ");
     format!(
         "provider {{\n{inner}{skills}\n{indent}}}",
-        skills = skills_snippet(skill_id, rel_path, &inner),
+        skills = skills_snippet(skill_id, reference, &inner),
     )
 }
 
@@ -499,9 +683,9 @@ enozunu config-version=1 {
 
         assert_eq!(
             outcome,
-            AddSkillOutcome::Added {
+            AddSkillOutcome::Added(AddedSource::Local {
                 manifest_relative_path: "skills/review".to_owned()
-            }
+            })
         );
         let written = fs::read_to_string(&manifest_path).unwrap();
         let expected = r#"// Project manifest.
@@ -593,9 +777,9 @@ enozunu config-version=1 {
 
         assert_eq!(
             outcome,
-            AddSkillOutcome::Added {
+            AddSkillOutcome::Added(AddedSource::Local {
                 manifest_relative_path: "../catalog/skills/review".to_owned()
-            }
+            })
         );
         let written = fs::read_to_string(&manifest_path).unwrap();
         assert!(written.contains("path \"../catalog/skills/review\""));
@@ -623,9 +807,9 @@ enozunu config-version=1 {
 
         assert_eq!(
             outcome,
-            AddSkillOutcome::Added {
+            AddSkillOutcome::Added(AddedSource::Local {
                 manifest_relative_path: "skills/review".to_owned()
-            }
+            })
         );
     }
 
@@ -861,5 +1045,283 @@ enozunu config-version=1 {
             relative_path(Path::new("/a"), Path::new("/a")),
             Some(".".to_owned())
         );
+    }
+
+    mod url_flow {
+        use super::*;
+        use crate::git::{GitError, GitSelector, RemoteRefs, ResolvedSource};
+        use std::cell::Cell;
+
+        const URL: &str = "https://github.com/example/repo/tree/main/skills/review";
+        const MINIMAL_MANIFEST: &str =
+            "enozunu config-version=1 {\n  consumer {\n    claude {\n    }\n  }\n}\n";
+
+        struct FakeRefLister(RemoteRefs);
+        impl GitRefLister for FakeRefLister {
+            fn list_refs(&self, _url: &str) -> Result<RemoteRefs, GitError> {
+                Ok(self.0.clone())
+            }
+        }
+
+        struct FailingRefLister;
+        impl GitRefLister for FailingRefLister {
+            fn list_refs(&self, url: &str) -> Result<RemoteRefs, GitError> {
+                Err(GitError::Fetch(format!("cannot reach `{url}`")))
+            }
+        }
+
+        struct FakeResolver {
+            content_root: PathBuf,
+            resolved: Cell<bool>,
+        }
+        impl FakeResolver {
+            fn new(content_root: PathBuf) -> Self {
+                Self {
+                    content_root,
+                    resolved: Cell::new(false),
+                }
+            }
+        }
+        impl GitResolver for FakeResolver {
+            fn resolve(&self, _request: &GitResolutionRequest) -> Result<ResolvedSource, GitError> {
+                self.resolved.set(true);
+                Ok(ResolvedSource {
+                    commit: "468aac8caed5f0c3b859b8286968e2c78e2b8760".to_owned(),
+                    content_root: self.content_root.clone(),
+                })
+            }
+        }
+
+        fn main_refs() -> RemoteRefs {
+            RemoteRefs {
+                branches: vec!["main".to_owned()],
+                tags: Vec::new(),
+            }
+        }
+
+        /// A manifest plus a fake resolved content tree holding `skills/review/SKILL.md`.
+        fn setup() -> (tempfile::TempDir, PathBuf, FakeResolver) {
+            let tmp = tempfile::tempdir().unwrap();
+            let manifest_path = tmp.path().join("enozunu.kdl");
+            fs::write(&manifest_path, MINIMAL_MANIFEST).unwrap();
+            let content_root = tmp.path().join("resolved");
+            fs::create_dir_all(content_root.join("skills/review")).unwrap();
+            fs::write(content_root.join("skills/review/SKILL.md"), "# skill\n").unwrap();
+            let resolver = FakeResolver::new(content_root);
+            (tmp, manifest_path, resolver)
+        }
+
+        #[test]
+        fn records_a_git_source_after_confirmation() {
+            let (_tmp, manifest_path, resolver) = setup();
+            let mut confirmed_with = None;
+            let mut confirm = |spec: &GitSourceSpec| {
+                confirmed_with = Some(spec.clone());
+                Ok(true)
+            };
+
+            let outcome = run_add_skill_from_url(
+                &manifest_path,
+                "review",
+                URL,
+                &FakeRefLister(main_refs()),
+                &resolver,
+                &mut confirm,
+            )
+            .unwrap();
+
+            let expected_spec = GitSourceSpec {
+                url: "https://github.com/example/repo".to_owned(),
+                selector: GitSelector::Branch("main".to_owned()),
+                path: "skills/review".to_owned(),
+            };
+            assert_eq!(
+                outcome,
+                AddSkillOutcome::Added(AddedSource::Git(expected_spec.clone()))
+            );
+            assert_eq!(confirmed_with, Some(expected_spec));
+            let written = fs::read_to_string(&manifest_path).unwrap();
+            let expected = "enozunu config-version=1 {\n  provider {\n    skills {\n      skill \"review\" {\n        git {\n          url \"https://github.com/example/repo\"\n          branch \"main\"\n          path \"skills/review\"\n        }\n      }\n    }\n  }\n  consumer {\n    claude {\n    }\n  }\n}\n";
+            assert_eq!(written, expected);
+        }
+
+        #[test]
+        fn declined_confirmation_leaves_the_manifest_unchanged() {
+            let (_tmp, manifest_path, resolver) = setup();
+
+            let outcome = run_add_skill_from_url(
+                &manifest_path,
+                "review",
+                URL,
+                &FakeRefLister(main_refs()),
+                &resolver,
+                &mut |_| Ok(false),
+            )
+            .unwrap();
+
+            assert_eq!(outcome, AddSkillOutcome::Aborted);
+            assert_eq!(
+                fs::read_to_string(&manifest_path).unwrap(),
+                MINIMAL_MANIFEST
+            );
+        }
+
+        #[test]
+        fn a_resolved_source_without_skill_md_is_rejected_before_confirmation() {
+            let (_tmp, manifest_path, resolver) = setup();
+            fs::remove_file(resolver.content_root.join("skills/review/SKILL.md")).unwrap();
+            let mut confirm_called = false;
+
+            let diags = run_add_skill_from_url(
+                &manifest_path,
+                "review",
+                URL,
+                &FakeRefLister(main_refs()),
+                &resolver,
+                &mut |_| {
+                    confirm_called = true;
+                    Ok(true)
+                },
+            )
+            .unwrap_err();
+
+            assert_eq!(diags[0].code, DiagnosticCode::ArtifactShape);
+            assert!(
+                !confirm_called,
+                "confirmation must not run for an invalid source"
+            );
+            assert_eq!(
+                fs::read_to_string(&manifest_path).unwrap(),
+                MINIMAL_MANIFEST
+            );
+        }
+
+        #[test]
+        fn the_same_declared_git_source_is_a_no_op_without_resolving() {
+            let (_tmp, manifest_path, resolver) = setup();
+            fs::write(
+                &manifest_path,
+                "enozunu config-version=1 {\n  provider {\n    skills {\n      skill \"review\" {\n        git {\n          url \"https://github.com/example/repo\"\n          branch \"main\"\n          path \"skills/review\"\n        }\n      }\n    }\n  }\n  consumer {\n    claude {\n    }\n  }\n}\n",
+            )
+            .unwrap();
+
+            let outcome = run_add_skill_from_url(
+                &manifest_path,
+                "review",
+                URL,
+                &FakeRefLister(main_refs()),
+                &resolver,
+                &mut |_| Ok(true),
+            )
+            .unwrap();
+
+            assert_eq!(outcome, AddSkillOutcome::AlreadyDeclared);
+            assert!(
+                !resolver.resolved.get(),
+                "a no-op must not fetch the repository"
+            );
+        }
+
+        #[test]
+        fn a_different_declared_source_is_a_conflict() {
+            let (_tmp, manifest_path, resolver) = setup();
+            fs::write(
+                &manifest_path,
+                "enozunu config-version=1 {\n  provider {\n    skills {\n      skill \"review\" {\n        local {\n          path \"skills/review\"\n        }\n      }\n    }\n  }\n  consumer {\n    claude {\n    }\n  }\n}\n",
+            )
+            .unwrap();
+
+            let diags = run_add_skill_from_url(
+                &manifest_path,
+                "review",
+                URL,
+                &FakeRefLister(main_refs()),
+                &resolver,
+                &mut |_| Ok(true),
+            )
+            .unwrap_err();
+
+            assert_eq!(diags[0].code, DiagnosticCode::DuplicateSourceName);
+        }
+
+        #[test]
+        fn describe_keeps_each_added_source_kind_identifiable() {
+            assert_eq!(
+                AddedSource::Local {
+                    manifest_relative_path: "../catalog/skills/review".to_owned()
+                }
+                .describe(),
+                "local: ../catalog/skills/review"
+            );
+            assert_eq!(
+                AddedSource::Git(GitSourceSpec {
+                    url: "https://github.com/example/repo".to_owned(),
+                    selector: GitSelector::Branch("main".to_owned()),
+                    path: "skills/review".to_owned(),
+                })
+                .describe(),
+                "git: https://github.com/example/repo branch main, path skills/review"
+            );
+        }
+
+        #[test]
+        fn confirmation_prompt_shows_the_recorded_values_and_reads_the_answer() {
+            let spec = GitSourceSpec {
+                url: "https://github.com/example/repo".to_owned(),
+                selector: GitSelector::Branch("main".to_owned()),
+                path: "skills/review".to_owned(),
+            };
+            let cases = [
+                ("y\n", true),
+                ("Y\n", true),
+                ("yes\n", true),
+                ("YES\n", true),
+                ("n\n", false),
+                ("\n", false),
+                // EOF without an answer declines rather than proceeding.
+                ("", false),
+                ("no\n", false),
+                ("yep\n", false),
+            ];
+            for (answer, expected) in cases {
+                let mut input = std::io::Cursor::new(answer.as_bytes());
+                let mut output = Vec::new();
+                let accepted = prompt_git_source_confirmation(
+                    &mut input,
+                    &mut output,
+                    "review",
+                    Path::new("enozunu.kdl"),
+                    &spec,
+                )
+                .unwrap();
+                assert_eq!(accepted, expected, "answer `{answer}`");
+                let shown = String::from_utf8(output).unwrap();
+                assert_eq!(
+                    shown,
+                    "skill-id: review\nurl: https://github.com/example/repo\nbranch: main\npath: skills/review\nadd this Skill source to enozunu.kdl? [y/N] "
+                );
+            }
+        }
+
+        #[test]
+        fn an_unreachable_remote_is_a_git_resolution_error() {
+            let (_tmp, manifest_path, resolver) = setup();
+
+            let diags = run_add_skill_from_url(
+                &manifest_path,
+                "review",
+                URL,
+                &FailingRefLister,
+                &resolver,
+                &mut |_| Ok(true),
+            )
+            .unwrap_err();
+
+            assert_eq!(diags[0].code, DiagnosticCode::GitResolution);
+            assert_eq!(
+                fs::read_to_string(&manifest_path).unwrap(),
+                MINIMAL_MANIFEST
+            );
+        }
     }
 }

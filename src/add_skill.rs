@@ -296,9 +296,13 @@ fn load_manifest_for_edit(
 /// Whether the URL remainder spells out exactly the declared selector followed by the
 /// declared path (a root path `.` meaning the selector consumes the whole remainder).
 ///
-/// A textual match cannot see whether the remote would also read the URL another way (say, a
-/// tag shadowing the declared branch); that imprecision is deliberate, because a match only
-/// ever produces a no-op — resolving the ambiguity could not change the manifest either way.
+/// A textual match ignores the declared selector's kind, so it cannot see remote-side drift:
+/// it accepts a URL the remote would read as an additional interpretation (a tag shadowing
+/// the declared branch), and even one whose sole current reading has a different kind than
+/// the declaration (a declared tag whose name is now a branch), where the online path would
+/// report a conflict instead. That imprecision is deliberate: a match only ever produces a
+/// no-op against an unchanged declaration, so resolving it could not change the manifest —
+/// at worst the "same source" report papers over ref churn on the remote.
 fn remainder_matches(selector: &crate::git::GitSelector, path: &str, remainder: &[String]) -> bool {
     let selector_value = match selector {
         crate::git::GitSelector::Branch(branch) => branch.as_str(),

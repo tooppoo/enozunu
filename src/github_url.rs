@@ -1,11 +1,16 @@
 //! Resolves GitHub tree/blob web URLs into Git source references for `add-skill`.
 //!
-//! Only the two documented shorthand forms are accepted:
+//! The accepted forms are:
 //!
 //! ```text
 //! https://github.com/<owner>/<repo>/tree/<ref>/<skill-path>
 //! https://github.com/<owner>/<repo>/blob/<ref>/<skill-path>/SKILL.md
+//! https://github.com/<owner>/<repo>            (repository root at the default branch)
 //! ```
+//!
+//! A repository whose root is itself the Skill directory (`SKILL.md` at the top level) is
+//! addressed by the repository URL or by a tree/blob URL whose ref consumes the whole
+//! remainder; both record the Skill path as `.`.
 //!
 //! The `<ref>` / `<skill-path>` boundary is never guessed from the string alone: the remote's
 //! advertised branches and tags decide it, so a branch or tag containing `/` resolves
@@ -44,11 +49,11 @@ impl GitSourceSpec {
     }
 }
 
-/// Parses `url` as one of the two supported GitHub Skill URL forms.
+/// Parses `url` as one of the supported GitHub Skill URL forms.
 ///
-/// Everything else — repository root URLs, raw and Gist URLs, other hosts, Git remote
-/// shorthand — is rejected here with a diagnostic naming what is supported, before any
-/// network access happens.
+/// Everything else — profile URLs, raw and Gist URLs, other hosts, Git remote shorthand —
+/// is rejected here with a diagnostic naming what is supported, before any network access
+/// happens.
 pub fn parse_github_skill_url(url: &str) -> Result<ParsedGithubUrl, Diagnostic> {
     let unsupported =
         |message: String| Diagnostic::new(DiagnosticCode::UnsupportedSourceReference, message);
@@ -84,13 +89,25 @@ pub fn parse_github_skill_url(url: &str) -> Result<ParsedGithubUrl, Diagnostic> 
     }
 
     let segments: Vec<&str> = rest.trim_end_matches('/').split('/').collect();
-    if segments.len() < 4 || segments[..2].iter().any(|s| s.is_empty()) {
+    if segments.len() < 2 || segments.iter().take(2).any(|s| s.is_empty()) {
         return Err(unsupported(format!(
-            "skill source URL `{url}` points at a repository or profile, not a Skill; expected a tree URL naming the Skill directory or a blob URL naming its SKILL.md"
+            "skill source URL `{url}` points at a profile, not a repository or Skill; expected a repository URL, a tree URL naming the Skill directory, or a blob URL naming its SKILL.md"
         )));
     }
 
-    let (owner, repo, marker) = (segments[0], segments[1], segments[2]);
+    let (owner, repo) = (segments[0], segments[1]);
+    let repo_url = format!("https://github.com/{owner}/{repo}");
+
+    // A bare repository URL addresses the repository root at its default branch; whether the
+    // root actually is a Skill directory is checked against the resolved content later.
+    if segments.len() == 2 {
+        return Ok(ParsedGithubUrl {
+            repo_url,
+            ref_and_path: Vec::new(),
+        });
+    }
+
+    let marker = segments[2];
     let mut ref_and_path: Vec<String> = segments[3..].iter().map(|s| s.to_string()).collect();
     if ref_and_path.iter().any(|s| s.is_empty()) {
         return Err(unsupported(format!(
@@ -99,7 +116,13 @@ pub fn parse_github_skill_url(url: &str) -> Result<ParsedGithubUrl, Diagnostic> 
     }
 
     match marker {
-        "tree" => {}
+        "tree" => {
+            if ref_and_path.is_empty() {
+                return Err(unsupported(format!(
+                    "skill source URL `{url}` is missing a ref after /tree/"
+                )));
+            }
+        }
         "blob" => {
             if ref_and_path.last().map(String::as_str) != Some("SKILL.md") {
                 return Err(unsupported(format!(
@@ -121,39 +144,61 @@ pub fn parse_github_skill_url(url: &str) -> Result<ParsedGithubUrl, Diagnostic> 
     }
 
     Ok(ParsedGithubUrl {
-        repo_url: format!("https://github.com/{owner}/{repo}"),
+        repo_url,
         ref_and_path,
     })
 }
 
 /// Splits the parsed URL's remainder into a selector and a Skill path using the remote's refs.
 ///
-/// Every leading-segment prefix that names an advertised branch or tag is a candidate, and a
+/// Every leading-segment prefix that names an advertised branch or tag is a candidate — a ref
+/// consuming the whole remainder addresses the repository root, recorded as path `.` — and a
 /// full-commit-id first segment is a revision candidate; exactly one candidate must remain.
 /// Zero candidates means the URL names no known ref; more than one means the URL is ambiguous
-/// and the caller must disambiguate — neither is resolved by preference.
+/// and the caller must disambiguate — neither is resolved by preference. An empty remainder
+/// (bare repository URL) resolves to the remote's default branch at the repository root.
 pub fn resolve_boundary(
     parsed: &ParsedGithubUrl,
     refs: &RemoteRefs,
 ) -> Result<GitSourceSpec, Diagnostic> {
     let segments = &parsed.ref_and_path;
+
+    if segments.is_empty() {
+        let Some(head) = &refs.head_branch else {
+            return Err(Diagnostic::new(
+                DiagnosticCode::GitResolution,
+                format!(
+                    "cannot determine the default branch of `{}`: the remote advertises no HEAD; pass a tree URL naming the ref",
+                    parsed.repo_url
+                ),
+            ));
+        };
+        return Ok(GitSourceSpec {
+            url: parsed.repo_url.clone(),
+            selector: GitSelector::Branch(head.clone()),
+            path: ".".to_owned(),
+        });
+    }
+
+    let path_after = |k: usize| {
+        if k == segments.len() {
+            ".".to_owned()
+        } else {
+            segments[k..].join("/")
+        }
+    };
     let mut candidates: Vec<(GitSelector, String)> = Vec::new();
-    // `k < segments.len()` keeps at least one segment for the Skill path; a ref that consumes
-    // every segment is reported separately below, as a repository-root URL.
-    for k in 1..segments.len() {
+    for k in 1..=segments.len() {
         let name = segments[..k].join("/");
-        let path = segments[k..].join("/");
         if refs.branches.contains(&name) {
-            candidates.push((GitSelector::Branch(name.clone()), path.clone()));
+            candidates.push((GitSelector::Branch(name.clone()), path_after(k)));
         }
         if refs.tags.contains(&name) {
-            candidates.push((GitSelector::Tag(name), path));
+            candidates.push((GitSelector::Tag(name), path_after(k)));
         }
     }
-    if segments.len() >= 2
-        && let Some(sha) = CommitSha::parse(&segments[0])
-    {
-        candidates.push((GitSelector::Revision(sha), segments[1..].join("/")));
+    if let Some(sha) = CommitSha::parse(&segments[0]) {
+        candidates.push((GitSelector::Revision(sha), path_after(1)));
     }
 
     match candidates.len() {
@@ -165,30 +210,14 @@ pub fn resolve_boundary(
                 path,
             })
         }
-        0 => {
-            let joined = segments.join("/");
-            // The whole remainder naming a ref — an advertised branch or tag, or a lone full
-            // commit id — is a real situation with its own cause: the URL points at the Skill
-            // repository's root for that ref, and a Skill path is missing.
-            let full = refs
-                .branches
-                .iter()
-                .chain(refs.tags.iter())
-                .any(|r| *r == joined)
-                || (segments.len() == 1 && CommitSha::parse(&segments[0]).is_some());
-            let message = if full {
-                format!(
-                    "URL resolves `{joined}` to a ref of `{}` with no Skill path after it; the URL must point at the Skill directory, not the repository root",
-                    parsed.repo_url
-                )
-            } else {
-                format!(
-                    "cannot resolve `{joined}` against `{}`: no leading segments name an advertised branch or tag, and the first segment is not a full commit id",
-                    parsed.repo_url
-                )
-            };
-            Err(Diagnostic::new(DiagnosticCode::GitResolution, message))
-        }
+        0 => Err(Diagnostic::new(
+            DiagnosticCode::GitResolution,
+            format!(
+                "cannot resolve `{}` against `{}`: no leading segments name an advertised branch or tag, and the first segment is not a full commit id",
+                segments.join("/"),
+                parsed.repo_url
+            ),
+        )),
         _ => {
             let readings: Vec<String> = candidates
                 .iter()
@@ -222,6 +251,7 @@ mod tests {
         RemoteRefs {
             branches: branches.iter().map(|s| s.to_string()).collect(),
             tags: tags.iter().map(|s| s.to_string()).collect(),
+            head_branch: None,
         }
     }
 
@@ -244,6 +274,18 @@ mod tests {
     }
 
     #[test]
+    fn parses_a_bare_repository_url_with_an_empty_remainder() {
+        let parsed = parse("https://github.com/example/repo");
+        assert_eq!(parsed.repo_url, "https://github.com/example/repo");
+        assert!(parsed.ref_and_path.is_empty());
+        assert_eq!(
+            parse("https://github.com/example/repo/"),
+            parsed,
+            "a trailing slash must not change the reading"
+        );
+    }
+
+    #[test]
     fn accepts_a_trailing_slash_on_a_tree_url() {
         let parsed = parse("https://github.com/example/repo/tree/main/skills/review/");
         assert_eq!(parsed.ref_and_path, ["main", "skills", "review"]);
@@ -252,10 +294,11 @@ mod tests {
     #[test]
     fn rejects_unsupported_url_forms() {
         let cases = [
-            "https://github.com/example/repo",
-            "https://github.com/example/repo/",
             "https://github.com/example",
+            "https://github.com/example/",
             "https://github.com/example/repo/commits/main/skills",
+            "https://github.com/example/repo/tree",
+            "https://github.com/example/repo/blob/SKILL.md",
             "https://github.com/example/repo/blob/main/skills/review/README.md",
             "https://github.com/example/repo/tree/main/skills/review?tab=readme",
             "https://github.com/example/repo/tree/main/skills/review#usage",
@@ -354,16 +397,43 @@ mod tests {
     }
 
     #[test]
-    fn rejects_a_lone_commit_id_as_a_repository_root() {
+    fn resolves_a_lone_commit_id_to_the_repository_root() {
         let sha = "468aac8caed5f0c3b859b8286968e2c78e2b8760";
         let parsed = parse(&format!("https://github.com/example/repo/tree/{sha}"));
+        let spec = resolve_boundary(&parsed, &refs(&["main"], &[])).unwrap();
+        assert_eq!(
+            spec.selector,
+            GitSelector::Revision(CommitSha::parse(sha).unwrap())
+        );
+        assert_eq!(spec.path, ".");
+    }
+
+    #[test]
+    fn resolves_a_bare_repository_url_to_the_default_branch_root() {
+        let parsed = parse("https://github.com/example/repo");
+        let mut remote = refs(&["develop", "main"], &[]);
+        remote.head_branch = Some("main".to_owned());
+        let spec = resolve_boundary(&parsed, &remote).unwrap();
+        assert_eq!(spec.selector, GitSelector::Branch("main".to_owned()));
+        assert_eq!(spec.path, ".");
+    }
+
+    #[test]
+    fn a_bare_repository_url_without_an_advertised_head_is_an_error() {
+        let parsed = parse("https://github.com/example/repo/");
         let diag = resolve_boundary(&parsed, &refs(&["main"], &[])).unwrap_err();
         assert_eq!(diag.code, DiagnosticCode::GitResolution);
-        assert!(
-            diag.message.contains("not the repository root"),
-            "{}",
-            diag.message
-        );
+        assert!(diag.message.contains("default branch"), "{}", diag.message);
+    }
+
+    #[test]
+    fn a_full_ref_and_a_shorter_ref_reading_are_ambiguous() {
+        // `main/sub` reads as branch `main` with path `sub` and as branch `main/sub`
+        // addressing the repository root; neither is preferred.
+        let parsed = parse("https://github.com/example/repo/tree/main/sub");
+        let diag = resolve_boundary(&parsed, &refs(&["main", "main/sub"], &[])).unwrap_err();
+        assert_eq!(diag.code, DiagnosticCode::GitResolution);
+        assert!(diag.message.contains("ambiguous"), "{}", diag.message);
     }
 
     #[test]
@@ -375,15 +445,19 @@ mod tests {
     }
 
     #[test]
-    fn rejects_a_ref_with_no_skill_path_as_a_repository_root() {
+    fn resolves_a_full_ref_remainder_to_the_repository_root() {
         let parsed = parse("https://github.com/example/repo/tree/feature/x");
-        // `feature/x` names a branch in full, leaving no Skill path.
-        let diag = resolve_boundary(&parsed, &refs(&["feature/x"], &[])).unwrap_err();
-        assert_eq!(diag.code, DiagnosticCode::GitResolution);
-        assert!(
-            diag.message.contains("not the repository root"),
-            "{}",
-            diag.message
-        );
+        // `feature/x` names a branch in full: the URL addresses the repository root.
+        let spec = resolve_boundary(&parsed, &refs(&["feature/x"], &[])).unwrap();
+        assert_eq!(spec.selector, GitSelector::Branch("feature/x".to_owned()));
+        assert_eq!(spec.path, ".");
+    }
+
+    #[test]
+    fn resolves_a_blob_url_for_a_root_skill_md() {
+        let parsed = parse("https://github.com/example/repo/blob/main/SKILL.md");
+        let spec = resolve_boundary(&parsed, &refs(&["main"], &[])).unwrap();
+        assert_eq!(spec.selector, GitSelector::Branch("main".to_owned()));
+        assert_eq!(spec.path, ".");
     }
 }

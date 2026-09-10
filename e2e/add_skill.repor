@@ -79,11 +79,11 @@ case "a URL outside github.com tree/blob forms is rejected without touching the 
   }
 }
 
-case "a repository root URL is rejected" {
-  $ enozunu add-skill review "https://github.com/example/repo"
+case "a profile URL without a repository is rejected" {
+  $ enozunu add-skill review "https://github.com/example"
   assert {
     exit 1
-    stderr contains "points at a repository or profile"
+    stderr contains "points at a profile"
   }
 }
 

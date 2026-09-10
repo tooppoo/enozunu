@@ -86,6 +86,9 @@ pub trait GitResolver {
 pub struct RemoteRefs {
     pub branches: Vec<String>,
     pub tags: Vec<String>,
+    /// The branch the remote's `HEAD` symref points at, when advertised: the default branch a
+    /// repository-root URL without an explicit ref resolves to.
+    pub head_branch: Option<String>,
 }
 
 /// Lists a remote's advertised refs.
@@ -102,11 +105,28 @@ pub struct CommandGitRefLister;
 
 impl GitRefLister for CommandGitRefLister {
     fn list_refs(&self, url: &str) -> Result<RemoteRefs, GitError> {
-        let output = run_git_anywhere(&["ls-remote", "--heads", "--tags", "--", url])
-            .map_err(|e| fetch_error(url, e))?;
+        // `--symref` adds a `ref: refs/heads/<branch>\tHEAD` line advertising the default
+        // branch; the explicit patterns keep branch and tag listing scoped as before while
+        // also matching `HEAD`.
+        let output = run_git_anywhere(&[
+            "ls-remote",
+            "--symref",
+            "--",
+            url,
+            "HEAD",
+            "refs/heads/*",
+            "refs/tags/*",
+        ])
+        .map_err(|e| fetch_error(url, e))?;
         let mut refs = RemoteRefs::default();
         for line in output.lines() {
-            // Each line is `<object-id>\t<ref-name>`.
+            if let Some(symref) = line.strip_prefix("ref: ")
+                && let Some((target, "HEAD")) = symref.split_once('\t')
+            {
+                refs.head_branch = target.strip_prefix("refs/heads/").map(str::to_owned);
+                continue;
+            }
+            // Every other line is `<object-id>\t<ref-name>`.
             let Some((_, name)) = line.split_once('\t') else {
                 continue;
             };
@@ -461,6 +481,7 @@ mod tests {
         let mut tags = refs.tags.clone();
         tags.sort();
         assert_eq!(tags, ["v1.0.0", "v2.0.0"]);
+        assert_eq!(refs.head_branch.as_deref(), Some("main"));
     }
 
     #[test]

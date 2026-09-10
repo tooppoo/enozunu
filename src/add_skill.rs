@@ -190,25 +190,48 @@ pub fn run_add_skill_from_url(
     let (text, parsed) = load_manifest_for_edit(manifest_path)?;
 
     let parsed_url = parse_github_skill_url(url).map_err(|d| vec![d])?;
+
+    // The existing-declaration decision comes before any remote access: a remainder that
+    // textually spells out the declared selector and path proves a no-op offline, a different
+    // repository (or a non-Git source) is a conflict offline, and only a same-repository URL
+    // whose remainder does not match needs the remote's refs to settle no-op versus conflict
+    // (a listing only — the repository is never fetched on either outcome).
+    if let Some(existing) = parsed.provider.skills.iter().find(|d| d.name == skill_id) {
+        return match &existing.reference {
+            SourceReference::Git {
+                url: existing_url,
+                selector,
+                path,
+            } if *existing_url == parsed_url.repo_url => {
+                if remainder_matches(selector, path, &parsed_url.ref_and_path) {
+                    Ok(AddSkillOutcome::AlreadyDeclared)
+                } else {
+                    let refs = ref_lister
+                        .list_refs(&parsed_url.repo_url)
+                        .map_err(|e| vec![crate::git_error_diagnostic(e)])?;
+                    let spec = resolve_boundary(&parsed_url, &refs).map_err(|d| vec![d])?;
+                    let same = existing.reference
+                        == SourceReference::Git {
+                            url: spec.url.clone(),
+                            selector: spec.selector.clone(),
+                            path: spec.path.clone(),
+                        };
+                    if same {
+                        Ok(AddSkillOutcome::AlreadyDeclared)
+                    } else {
+                        Err(conflict_error(skill_id, manifest_path))
+                    }
+                }
+            }
+            _ => Err(conflict_error(skill_id, manifest_path)),
+        };
+    }
+
     let refs = ref_lister
         .list_refs(&parsed_url.repo_url)
         .map_err(|e| vec![crate::git_error_diagnostic(e)])?;
     let spec = resolve_boundary(&parsed_url, &refs).map_err(|d| vec![d])?;
     manifest::validate_source_path(&spec.path, "skill", skill_id).map_err(|d| vec![d])?;
-
-    if let Some(existing) = parsed.provider.skills.iter().find(|d| d.name == skill_id) {
-        let same = existing.reference
-            == SourceReference::Git {
-                url: spec.url.clone(),
-                selector: spec.selector.clone(),
-                path: spec.path.clone(),
-            };
-        return if same {
-            Ok(AddSkillOutcome::AlreadyDeclared)
-        } else {
-            Err(conflict_error(skill_id, manifest_path))
-        };
-    }
 
     // The resolved commit's content must satisfy the Skill source contract before the user is
     // even asked; a confirmation for a source summon would reject helps nobody.
@@ -268,6 +291,26 @@ fn load_manifest_for_edit(
     })?;
     let parsed = manifest::parse(&text)?;
     Ok((text, parsed))
+}
+
+/// Whether the URL remainder spells out exactly the declared selector followed by the
+/// declared path (a root path `.` meaning the selector consumes the whole remainder).
+///
+/// A textual match cannot see whether the remote would also read the URL another way (say, a
+/// tag shadowing the declared branch); that imprecision is deliberate, because a match only
+/// ever produces a no-op — resolving the ambiguity could not change the manifest either way.
+fn remainder_matches(selector: &crate::git::GitSelector, path: &str, remainder: &[String]) -> bool {
+    let selector_value = match selector {
+        crate::git::GitSelector::Branch(branch) => branch.as_str(),
+        crate::git::GitSelector::Tag(tag) => tag.as_str(),
+        crate::git::GitSelector::Revision(sha) => sha.as_str(),
+    };
+    let expected = if path == "." {
+        selector_value.to_owned()
+    } else {
+        format!("{selector_value}/{path}")
+    };
+    remainder.join("/") == expected
 }
 
 fn conflict_error(skill_id: &str, manifest_path: &Path) -> Vec<Diagnostic> {
@@ -1096,6 +1139,7 @@ enozunu config-version=1 {
             RemoteRefs {
                 branches: vec!["main".to_owned()],
                 tags: Vec::new(),
+                head_branch: Some("main".to_owned()),
             }
         }
 
@@ -1197,7 +1241,7 @@ enozunu config-version=1 {
         }
 
         #[test]
-        fn the_same_declared_git_source_is_a_no_op_without_resolving() {
+        fn the_same_declared_git_source_is_a_no_op_without_any_remote_access() {
             let (_tmp, manifest_path, resolver) = setup();
             fs::write(
                 &manifest_path,
@@ -1205,11 +1249,12 @@ enozunu config-version=1 {
             )
             .unwrap();
 
+            // A failing lister proves the textual remainder match settles the no-op offline.
             let outcome = run_add_skill_from_url(
                 &manifest_path,
                 "review",
                 URL,
-                &FakeRefLister(main_refs()),
+                &FailingRefLister,
                 &resolver,
                 &mut |_| Ok(true),
             )
@@ -1223,11 +1268,61 @@ enozunu config-version=1 {
         }
 
         #[test]
-        fn a_different_declared_source_is_a_conflict() {
+        fn a_bare_url_matching_the_declared_default_branch_is_a_no_op_after_listing_refs() {
+            let (_tmp, manifest_path, resolver) = setup();
+            fs::write(
+                &manifest_path,
+                "enozunu config-version=1 {\n  provider {\n    skills {\n      skill \"review\" {\n        git {\n          url \"https://github.com/example/repo\"\n          branch \"main\"\n          path \".\"\n        }\n      }\n    }\n  }\n  consumer {\n    claude {\n    }\n  }\n}\n",
+            )
+            .unwrap();
+
+            // An empty remainder cannot match textually, so the refs listing decides.
+            let outcome = run_add_skill_from_url(
+                &manifest_path,
+                "review",
+                "https://github.com/example/repo",
+                &FakeRefLister(main_refs()),
+                &resolver,
+                &mut |_| Ok(true),
+            )
+            .unwrap();
+
+            assert_eq!(outcome, AddSkillOutcome::AlreadyDeclared);
+            assert!(
+                !resolver.resolved.get(),
+                "settling no-op versus conflict must not fetch the repository"
+            );
+        }
+
+        #[test]
+        fn a_different_declared_source_is_a_conflict_without_any_remote_access() {
             let (_tmp, manifest_path, resolver) = setup();
             fs::write(
                 &manifest_path,
                 "enozunu config-version=1 {\n  provider {\n    skills {\n      skill \"review\" {\n        local {\n          path \"skills/review\"\n        }\n      }\n    }\n  }\n  consumer {\n    claude {\n    }\n  }\n}\n",
+            )
+            .unwrap();
+
+            // A non-Git declaration conflicts offline: a failing lister proves it.
+            let diags = run_add_skill_from_url(
+                &manifest_path,
+                "review",
+                URL,
+                &FailingRefLister,
+                &resolver,
+                &mut |_| Ok(true),
+            )
+            .unwrap_err();
+
+            assert_eq!(diags[0].code, DiagnosticCode::DuplicateSourceName);
+        }
+
+        #[test]
+        fn a_same_repository_url_naming_another_ref_is_a_conflict_after_listing_refs() {
+            let (_tmp, manifest_path, resolver) = setup();
+            fs::write(
+                &manifest_path,
+                "enozunu config-version=1 {\n  provider {\n    skills {\n      skill \"review\" {\n        git {\n          url \"https://github.com/example/repo\"\n          branch \"develop\"\n          path \"skills/review\"\n        }\n      }\n    }\n  }\n  consumer {\n    claude {\n    }\n  }\n}\n",
             )
             .unwrap();
 
@@ -1242,6 +1337,43 @@ enozunu config-version=1 {
             .unwrap_err();
 
             assert_eq!(diags[0].code, DiagnosticCode::DuplicateSourceName);
+            assert!(
+                !resolver.resolved.get(),
+                "settling no-op versus conflict must not fetch the repository"
+            );
+        }
+
+        #[test]
+        fn records_a_repository_root_source_from_a_bare_url() {
+            let tmp = tempfile::tempdir().unwrap();
+            let manifest_path = tmp.path().join("enozunu.kdl");
+            fs::write(&manifest_path, MINIMAL_MANIFEST).unwrap();
+            // The resolved repository root is itself the Skill directory.
+            let content_root = tmp.path().join("resolved");
+            fs::create_dir_all(&content_root).unwrap();
+            fs::write(content_root.join("SKILL.md"), "# skill\n").unwrap();
+            let resolver = FakeResolver::new(content_root);
+
+            let outcome = run_add_skill_from_url(
+                &manifest_path,
+                "review",
+                "https://github.com/example/repo",
+                &FakeRefLister(main_refs()),
+                &resolver,
+                &mut |_| Ok(true),
+            )
+            .unwrap();
+
+            assert_eq!(
+                outcome,
+                AddSkillOutcome::Added(AddedSource::Git(GitSourceSpec {
+                    url: "https://github.com/example/repo".to_owned(),
+                    selector: GitSelector::Branch("main".to_owned()),
+                    path: ".".to_owned(),
+                }))
+            );
+            let written = fs::read_to_string(&manifest_path).unwrap();
+            assert!(written.contains("path \".\""), "{written}");
         }
 
         #[test]

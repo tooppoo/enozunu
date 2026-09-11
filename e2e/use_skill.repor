@@ -1,0 +1,112 @@
+# E2E: `enozunu use-skill` selects a declared Skill for a consumer target and
+# leaves the manifest untouched on no-op and error paths.
+
+before_each {
+  write <"enozunu.kdl"> ```
+    enozunu config-version=1 {
+      provider {
+        skills {
+          skill "review" {
+            local {
+              path "skills/review"
+            }
+          }
+        }
+      }
+      consumer {
+        claude {
+        }
+      }
+    }
+    ```
+}
+
+case "use-skill appends a direct use-skills declaration to the target" {
+  $ enozunu use-skill claude review
+  assert {
+    exit 0
+    stdout contains "selected skill `review` for claude"
+    file <"enozunu.kdl"> text_equals ```
+      enozunu config-version=1 {
+        provider {
+          skills {
+            skill "review" {
+              local {
+                path "skills/review"
+              }
+            }
+          }
+        }
+        consumer {
+          claude {
+            use-skills "review"
+          }
+        }
+      }
+      ```
+  }
+}
+
+case "a manifest written by use-skill passes validate" {
+  $ enozunu use-skill claude review
+  $ enozunu validate
+  assert {
+    exit 0
+    stdout contains "is valid"
+  }
+}
+
+case "use-skill creates a missing target block" {
+  $ enozunu use-skill codex review
+  assert {
+    exit 0
+    file <"enozunu.kdl"> text_equals ```
+      enozunu config-version=1 {
+        provider {
+          skills {
+            skill "review" {
+              local {
+                path "skills/review"
+              }
+            }
+          }
+        }
+        consumer {
+          claude {
+          }
+          codex {
+            use-skills "review"
+          }
+        }
+      }
+      ```
+  }
+}
+
+case "re-selecting the same skill is a no-op" {
+  $ enozunu use-skill claude review
+  $ enozunu use-skill claude review
+  assert {
+    exit 0
+    stdout contains "already selected for claude"
+  }
+}
+
+case "an undeclared skill is rejected without touching the manifest" {
+  $ enozunu use-skill claude missing
+  assert {
+    exit 1
+    stderr contains "is not declared under `provider.skills`"
+    not {
+      file <"enozunu.kdl"> contains "use-skills"
+    }
+  }
+}
+
+case "an unsupported consumer is rejected" {
+  $ enozunu use-skill cursor review
+  assert {
+    exit 1
+    stderr contains "is not a supported consumer"
+  }
+}

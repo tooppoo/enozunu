@@ -11,9 +11,11 @@ pub mod init;
 pub mod instruction;
 pub mod lock;
 pub mod manifest;
+pub(crate) mod manifest_edit;
 pub mod materialize;
 pub mod plan;
 pub mod provenance;
+pub mod use_skill;
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};

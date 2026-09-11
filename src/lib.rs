@@ -6,6 +6,7 @@ pub mod add_skill;
 pub mod diagnostics;
 pub mod gist;
 pub mod git;
+pub mod github_url;
 pub mod init;
 pub mod instruction;
 pub mod lock;
@@ -448,7 +449,7 @@ fn resolve_git_sources(
 /// Maps a Git-source transport failure to a diagnostic.
 ///
 /// For a Git source, a fetch failure and an unresolved branch or revision are all `GitResolution`; only a local filesystem failure is `Io`. Gist sources use their own mapping so their transport failures are not reported as `GitResolution`.
-fn git_error_diagnostic(error: GitError) -> Diagnostic {
+pub(crate) fn git_error_diagnostic(error: GitError) -> Diagnostic {
     match error {
         GitError::Fetch(message) | GitError::RevisionNotFound(message) => {
             Diagnostic::new(DiagnosticCode::GitResolution, message)

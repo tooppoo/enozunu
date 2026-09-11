@@ -33,7 +33,8 @@ enum Command {
     AddSkill {
         /// Name to declare the Skill source under.
         skill_id: String,
-        /// Skill source: a path to a local Skill directory containing SKILL.md.
+        /// Skill source: a path to a local Skill directory containing SKILL.md, or a GitHub
+        /// tree/blob URL pointing at a Skill directory (…/tree/<ref>/<path> or …/blob/<ref>/<path>/SKILL.md).
         source: String,
         /// Path to the manifest. Defaults to enozunu.kdl in the project root.
         #[arg(long)]
@@ -92,32 +93,55 @@ fn main() -> ExitCode {
             project_root,
         } => {
             let manifest_path = manifest.unwrap_or_else(|| project_root.join(MANIFEST_FILE_NAME));
-            std::env::current_dir()
-                .map_err(|e| {
-                    vec![Diagnostic::new(
-                        enozunu::diagnostics::DiagnosticCode::Io,
-                        format!("failed to resolve the current directory: {e}"),
-                    )]
-                })
-                .and_then(|cwd| {
-                    enozunu::add_skill::run_add_skill(&manifest_path, &skill_id, &source, &cwd)
-                })
-                .map(|outcome| match outcome {
-                    enozunu::add_skill::AddSkillOutcome::Added {
-                        manifest_relative_path,
-                    } => {
-                        println!(
-                            "added skill `{skill_id}` (local: {manifest_relative_path}) to {}",
-                            manifest_path.display()
-                        );
-                    }
-                    enozunu::add_skill::AddSkillOutcome::AlreadyDeclared => {
-                        println!(
-                            "skill `{skill_id}` is already declared with the same source; {} is unchanged",
-                            manifest_path.display()
-                        );
-                    }
-                })
+            let result = if source.starts_with("http://") || source.starts_with("https://") {
+                let resolver = CommandGitResolver::new(project_root.join(".enozunu/cache"));
+                let mut confirm = |spec: &enozunu::github_url::GitSourceSpec| {
+                    enozunu::add_skill::prompt_git_source_confirmation(
+                        &mut std::io::stdin().lock(),
+                        &mut std::io::stdout(),
+                        &skill_id,
+                        &manifest_path,
+                        spec,
+                    )
+                };
+                enozunu::add_skill::run_add_skill_from_url(
+                    &manifest_path,
+                    &skill_id,
+                    &source,
+                    &enozunu::git::CommandGitRefLister,
+                    &resolver,
+                    &mut confirm,
+                )
+            } else {
+                std::env::current_dir()
+                    .map_err(|e| {
+                        vec![Diagnostic::new(
+                            enozunu::diagnostics::DiagnosticCode::Io,
+                            format!("failed to resolve the current directory: {e}"),
+                        )]
+                    })
+                    .and_then(|cwd| {
+                        enozunu::add_skill::run_add_skill(&manifest_path, &skill_id, &source, &cwd)
+                    })
+            };
+            result.map(|outcome| match outcome {
+                enozunu::add_skill::AddSkillOutcome::Added(added) => {
+                    println!(
+                        "added skill `{skill_id}` ({}) to {}",
+                        added.describe(),
+                        manifest_path.display()
+                    );
+                }
+                enozunu::add_skill::AddSkillOutcome::AlreadyDeclared => {
+                    println!(
+                        "skill `{skill_id}` is already declared with the same source; {} is unchanged",
+                        manifest_path.display()
+                    );
+                }
+                enozunu::add_skill::AddSkillOutcome::Aborted => {
+                    println!("aborted; {} is unchanged", manifest_path.display());
+                }
+            })
         }
         Command::Validate {
             manifest,

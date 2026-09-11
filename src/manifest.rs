@@ -1650,16 +1650,22 @@ pub(crate) fn validate_local_source_path(
     Ok(())
 }
 
-/// Dot segments are rejected rather than normalized so that path containment does not depend on host-specific normalization.
-fn validate_source_path(path: &str, kind: &str, name: &str) -> Result<(), Diagnostic> {
+/// A lone `.` selects the source root; dot segments inside a longer path are rejected rather
+/// than normalized so that path containment does not depend on host-specific normalization.
+pub(crate) fn validate_source_path(path: &str, kind: &str, name: &str) -> Result<(), Diagnostic> {
+    if path == "." {
+        return Ok(());
+    }
     let invalid = path.is_empty()
         || path.starts_with('/')
-        || path.split('/').any(|seg| seg.is_empty() || seg == "..");
+        || path
+            .split('/')
+            .any(|seg| seg.is_empty() || seg == "." || seg == "..");
     if invalid {
         Err(Diagnostic::new(
             DiagnosticCode::UnsafePath,
             format!(
-                "{kind} `{name}` path `{path}` must be a relative path without empty or `..` segments"
+                "{kind} `{name}` path `{path}` must be `.` or a relative path without empty, `.`, or `..` segments"
             ),
         ))
     } else {

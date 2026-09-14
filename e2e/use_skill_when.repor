@@ -1,0 +1,90 @@
+# E2E: `enozunu use-skill --when` records only the missing usage rules.
+# Separate from use_skill.repor because these cases need an instruction source
+# and an existing conditional selection in the before_each manifest.
+
+before_each {
+  write <"enozunu.kdl"> ```
+    enozunu config-version=1 {
+      provider {
+        skills {
+          skill "review" {
+            local {
+              path "skills/review"
+            }
+          }
+        }
+        instructions {
+          claude {
+            local {
+              path "docs/base.md"
+            }
+          }
+        }
+      }
+      consumer {
+        claude {
+          use-skills "review" {
+            when "reviewing code"
+          }
+        }
+      }
+    }
+    ```
+}
+
+case "use-skill --when appends only the missing rules as one declaration" {
+  $ enozunu use-skill claude review --when "reviewing code" --when "before completion"
+  assert {
+    exit 0
+    stdout contains "selected skill `review` for claude (when: \"before completion\")"
+    # The existing conditional declaration is untouched; the new declaration
+    # carries only the rule that was missing.
+    file <"enozunu.kdl"> text_equals ```
+      enozunu config-version=1 {
+        provider {
+          skills {
+            skill "review" {
+              local {
+                path "skills/review"
+              }
+            }
+          }
+          instructions {
+            claude {
+              local {
+                path "docs/base.md"
+              }
+            }
+          }
+        }
+        consumer {
+          claude {
+            use-skills "review" {
+              when "reviewing code"
+            }
+            use-skills "review" {
+              when "before completion"
+            }
+          }
+        }
+      }
+      ```
+  }
+}
+
+case "a manifest written by use-skill --when passes validate" {
+  $ enozunu use-skill claude review --when "before completion"
+  $ enozunu validate
+  assert {
+    exit 0
+    stdout contains "is valid"
+  }
+}
+
+case "use-skill --when with every rule already effective is a no-op" {
+  $ enozunu use-skill claude review --when "reviewing code"
+  assert {
+    exit 0
+    stdout contains "already has the requested `when` rules"
+  }
+}

@@ -110,3 +110,22 @@ case "an unsupported consumer is rejected" {
     stderr contains "is not a supported consumer"
   }
 }
+
+case "use-skill --when without an instruction source is rejected" {
+  $ enozunu use-skill claude review --when "reviewing code"
+  assert {
+    exit 1
+    stderr contains "requires an effective instruction source"
+    not {
+      file <"enozunu.kdl"> contains "use-skills"
+    }
+  }
+}
+
+case "an empty --when value is rejected" {
+  $ enozunu use-skill claude review --when ""
+  assert {
+    exit 1
+    stderr contains "must not be empty"
+  }
+}

@@ -43,6 +43,19 @@ enum Command {
         #[arg(long, default_value = ".")]
         project_root: PathBuf,
     },
+    /// Select a provider Skill for a consumer target in the manifest.
+    UseSkill {
+        /// Consumer target AI to select the Skill for (claude or codex).
+        consumer: String,
+        /// Name of the Skill source to select, as declared under provider.skills.
+        skill_id: String,
+        /// Path to the manifest. Defaults to enozunu.kdl in the project root.
+        #[arg(long)]
+        manifest: Option<PathBuf>,
+        /// Project root directory. Defaults to the current directory.
+        #[arg(long, default_value = ".")]
+        project_root: PathBuf,
+    },
     /// Parse and validate the manifest without materializing anything.
     Validate {
         /// Path to the manifest. Defaults to enozunu.kdl in the project root.
@@ -142,6 +155,30 @@ fn main() -> ExitCode {
                     println!("aborted; {} is unchanged", manifest_path.display());
                 }
             })
+        }
+        Command::UseSkill {
+            consumer,
+            skill_id,
+            manifest,
+            project_root,
+        } => {
+            let manifest_path = manifest.unwrap_or_else(|| project_root.join(MANIFEST_FILE_NAME));
+            enozunu::use_skill::run_use_skill(&manifest_path, &consumer, &skill_id).map(
+                |outcome| match outcome {
+                    enozunu::use_skill::UseSkillOutcome::Selected => {
+                        println!(
+                            "selected skill `{skill_id}` for {consumer} in {}",
+                            manifest_path.display()
+                        );
+                    }
+                    enozunu::use_skill::UseSkillOutcome::AlreadySelected => {
+                        println!(
+                            "skill `{skill_id}` is already selected for {consumer}; {} is unchanged",
+                            manifest_path.display()
+                        );
+                    }
+                },
+            )
         }
         Command::Validate {
             manifest,

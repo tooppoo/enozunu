@@ -1544,19 +1544,28 @@ fn parse_when(node: &KdlNode, target: &str, diags: &mut Vec<Diagnostic>) -> Opti
         return fail("must have a string argument");
     };
 
-    if value.trim().is_empty() {
-        return fail("must not be empty");
-    }
-    if value.contains(['\r', '\n']) {
-        return fail("must be a single line without CR or LF");
-    }
-    if value != value.trim() {
-        return fail(
-            "must not have leading or trailing whitespace; the value is inserted verbatim and never trimmed",
-        );
+    if let Err(detail) = validate_when_value(value) {
+        return fail(detail);
     }
 
     Some(value.to_owned())
+}
+
+/// Checks the lexical `when` value contract shared by manifest parsing and the `use-skill`
+/// CLI: exactly the value checks of `parse_when`, without the node-shape checks.
+pub(crate) fn validate_when_value(value: &str) -> Result<(), &'static str> {
+    if value.trim().is_empty() {
+        return Err("must not be empty");
+    }
+    if value.contains(['\r', '\n']) {
+        return Err("must be a single line without CR or LF");
+    }
+    if value != value.trim() {
+        return Err(
+            "must not have leading or trailing whitespace; the value is inserted verbatim and never trimmed",
+        );
+    }
+    Ok(())
 }
 
 fn validate_references(manifest: &Manifest, diags: &mut Vec<Diagnostic>) {

@@ -49,6 +49,10 @@ enum Command {
         consumer: String,
         /// Name of the Skill source to select, as declared under provider.skills.
         skill_id: String,
+        /// Usage rule recorded on the selection and inserted into the generated instruction
+        /// file; repeatable. Requires an instruction source for the consumer.
+        #[arg(long = "when", value_name = "CONDITION")]
+        whens: Vec<String>,
         /// Path to the manifest. Defaults to enozunu.kdl in the project root.
         #[arg(long)]
         manifest: Option<PathBuf>,
@@ -159,23 +163,45 @@ fn main() -> ExitCode {
         Command::UseSkill {
             consumer,
             skill_id,
+            whens,
             manifest,
             project_root,
         } => {
             let manifest_path = manifest.unwrap_or_else(|| project_root.join(MANIFEST_FILE_NAME));
-            enozunu::use_skill::run_use_skill(&manifest_path, &consumer, &skill_id).map(
+            enozunu::use_skill::run_use_skill(&manifest_path, &consumer, &skill_id, &whens).map(
                 |outcome| match outcome {
-                    enozunu::use_skill::UseSkillOutcome::Selected => {
-                        println!(
-                            "selected skill `{skill_id}` for {consumer} in {}",
-                            manifest_path.display()
-                        );
+                    enozunu::use_skill::UseSkillOutcome::Selected { appended_whens } => {
+                        if appended_whens.is_empty() {
+                            println!(
+                                "selected skill `{skill_id}` for {consumer} in {}",
+                                manifest_path.display()
+                            );
+                        } else {
+                            // Only the rules actually recorded are listed, so a partially
+                            // satisfied request reports exactly what changed.
+                            let listed = appended_whens
+                                .iter()
+                                .map(|when| format!("\"{when}\""))
+                                .collect::<Vec<_>>()
+                                .join(", ");
+                            println!(
+                                "selected skill `{skill_id}` for {consumer} (when: {listed}) in {}",
+                                manifest_path.display()
+                            );
+                        }
                     }
                     enozunu::use_skill::UseSkillOutcome::AlreadySelected => {
-                        println!(
-                            "skill `{skill_id}` is already selected for {consumer}; {} is unchanged",
-                            manifest_path.display()
-                        );
+                        if whens.is_empty() {
+                            println!(
+                                "skill `{skill_id}` is already selected for {consumer}; {} is unchanged",
+                                manifest_path.display()
+                            );
+                        } else {
+                            println!(
+                                "skill `{skill_id}` already has the requested `when` rules for {consumer}; {} is unchanged",
+                                manifest_path.display()
+                            );
+                        }
                     }
                 },
             )

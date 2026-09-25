@@ -67,6 +67,17 @@ enozunu init
 
 This also generates `.enozunu/.gitignore` so the resolver cache under `.enozunu/cache/` stays out of version control.
 
+Add a Skill source to the manifest from a local directory or a GitHub tree/blob URL, and select it for a target AI:
+
+```sh
+enozunu add-skill review "https://github.com/example/repo/tree/main/skills/review"
+enozunu use-skill claude review
+```
+
+A URL is resolved against the remote's branches and tags, and the exact values to record are shown for confirmation before the manifest changes.
+`use-skill` also records conditional usage rules with `--when`.
+See [the manifest editing guide](docs/guide/manifest-editing.md) for the accepted URL forms, no-op behavior, and how these commands interact with `use-same-*`.
+
 Validate the manifest of the current project:
 
 ```sh

@@ -1544,19 +1544,28 @@ fn parse_when(node: &KdlNode, target: &str, diags: &mut Vec<Diagnostic>) -> Opti
         return fail("must have a string argument");
     };
 
-    if value.trim().is_empty() {
-        return fail("must not be empty");
-    }
-    if value.contains(['\r', '\n']) {
-        return fail("must be a single line without CR or LF");
-    }
-    if value != value.trim() {
-        return fail(
-            "must not have leading or trailing whitespace; the value is inserted verbatim and never trimmed",
-        );
+    if let Err(detail) = validate_when_value(value) {
+        return fail(detail);
     }
 
     Some(value.to_owned())
+}
+
+/// Checks the lexical `when` value contract shared by manifest parsing and the `use-skill`
+/// CLI: exactly the value checks of `parse_when`, without the node-shape checks.
+pub(crate) fn validate_when_value(value: &str) -> Result<(), &'static str> {
+    if value.trim().is_empty() {
+        return Err("must not be empty");
+    }
+    if value.contains(['\r', '\n']) {
+        return Err("must be a single line without CR or LF");
+    }
+    if value != value.trim() {
+        return Err(
+            "must not have leading or trailing whitespace; the value is inserted verbatim and never trimmed",
+        );
+    }
+    Ok(())
 }
 
 fn validate_references(manifest: &Manifest, diags: &mut Vec<Diagnostic>) {
@@ -1600,7 +1609,7 @@ fn validate_references(manifest: &Manifest, diags: &mut Vec<Diagnostic>) {
 }
 
 /// Source names become path segments under `.claude/`, so they must be single safe segments.
-fn validate_name(name: &str, kind: &str) -> Result<(), Diagnostic> {
+pub(crate) fn validate_name(name: &str, kind: &str) -> Result<(), Diagnostic> {
     let safe = !name.is_empty()
         && name != "."
         && name != ".."
@@ -1621,7 +1630,11 @@ fn validate_name(name: &str, kind: &str) -> Result<(), Diagnostic> {
 
 /// Local paths resolve from the manifest directory, so `..` segments are allowed for sibling repositories.
 /// Absolute paths are a portability hazard in a shared manifest, so v0.0.x rejects them until support is decided explicitly.
-fn validate_local_source_path(path: &str, kind: &str, name: &str) -> Result<(), Diagnostic> {
+pub(crate) fn validate_local_source_path(
+    path: &str,
+    kind: &str,
+    name: &str,
+) -> Result<(), Diagnostic> {
     // The manifest is shared across hosts, so Windows-style absolute forms (drive letter, `\` root, UNC) are rejected on every platform, not only where `Path::is_absolute` recognizes them.
     let absolute_like = path.starts_with('/')
         || path.starts_with('\\')
@@ -1646,16 +1659,22 @@ fn validate_local_source_path(path: &str, kind: &str, name: &str) -> Result<(), 
     Ok(())
 }
 
-/// Dot segments are rejected rather than normalized so that path containment does not depend on host-specific normalization.
-fn validate_source_path(path: &str, kind: &str, name: &str) -> Result<(), Diagnostic> {
+/// A lone `.` selects the source root; dot segments inside a longer path are rejected rather
+/// than normalized so that path containment does not depend on host-specific normalization.
+pub(crate) fn validate_source_path(path: &str, kind: &str, name: &str) -> Result<(), Diagnostic> {
+    if path == "." {
+        return Ok(());
+    }
     let invalid = path.is_empty()
         || path.starts_with('/')
-        || path.split('/').any(|seg| seg.is_empty() || seg == "..");
+        || path
+            .split('/')
+            .any(|seg| seg.is_empty() || seg == "." || seg == "..");
     if invalid {
         Err(Diagnostic::new(
             DiagnosticCode::UnsafePath,
             format!(
-                "{kind} `{name}` path `{path}` must be a relative path without empty or `..` segments"
+                "{kind} `{name}` path `{path}` must be `.` or a relative path without empty, `.`, or `..` segments"
             ),
         ))
     } else {

@@ -469,7 +469,8 @@ fn copy_dir(source: &Path, target: &Path) -> Result<(), Diagnostic> {
 
 /// Symlinks inside a Skill source are rejected outright.
 /// Following them could copy content from outside the checkout, and reproducing them could point generated output outside the target root.
-fn reject_symlinks(dir: &Path, source_name: &str) -> Result<(), Diagnostic> {
+/// Shared with `add-skill`'s pre-write validation so a source it accepts is one summon will accept.
+pub(crate) fn reject_symlinks(dir: &Path, source_name: &str) -> Result<(), Diagnostic> {
     for entry in fs::read_dir(dir).map_err(io_diag)? {
         let entry = entry.map_err(io_diag)?;
         let file_type = entry.file_type().map_err(io_diag)?;

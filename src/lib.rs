@@ -2,16 +2,20 @@
 //!
 //! The pipeline is: parse and validate the manifest, plan target paths, resolve Git and local sources, check every artifact, then write outputs, the provenance record, and the lock file.
 
+pub mod add_skill;
 pub mod diagnostics;
 pub mod gist;
 pub mod git;
+pub mod github_url;
 pub mod init;
 pub mod instruction;
 pub mod lock;
 pub mod manifest;
+pub(crate) mod manifest_edit;
 pub mod materialize;
 pub mod plan;
 pub mod provenance;
+pub mod use_skill;
 
 use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
@@ -447,7 +451,7 @@ fn resolve_git_sources(
 /// Maps a Git-source transport failure to a diagnostic.
 ///
 /// For a Git source, a fetch failure and an unresolved branch or revision are all `GitResolution`; only a local filesystem failure is `Io`. Gist sources use their own mapping so their transport failures are not reported as `GitResolution`.
-fn git_error_diagnostic(error: GitError) -> Diagnostic {
+pub(crate) fn git_error_diagnostic(error: GitError) -> Diagnostic {
     match error {
         GitError::Fetch(message) | GitError::RevisionNotFound(message) => {
             Diagnostic::new(DiagnosticCode::GitResolution, message)

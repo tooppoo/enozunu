@@ -81,6 +81,73 @@ pub trait GitResolver {
     fn resolve(&self, request: &GitResolutionRequest) -> Result<ResolvedSource, GitError>;
 }
 
+/// The branch and tag names a remote advertises, without their `refs/heads/` / `refs/tags/` prefixes.
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct RemoteRefs {
+    pub branches: Vec<String>,
+    pub tags: Vec<String>,
+    /// The branch the remote's `HEAD` symref points at, when advertised: the default branch a
+    /// repository-root URL without an explicit ref resolves to.
+    pub head_branch: Option<String>,
+}
+
+/// Lists a remote's advertised refs.
+///
+/// A separate trait from `GitResolver` because listing is a read of the remote's ref
+/// advertisement only — no checkout, no cache — and because `add-skill`'s URL boundary
+/// resolution must be testable with substituted refs, without any network access.
+pub trait GitRefLister {
+    fn list_refs(&self, url: &str) -> Result<RemoteRefs, GitError>;
+}
+
+/// Lists remote refs with the external `git ls-remote` command.
+pub struct CommandGitRefLister;
+
+impl GitRefLister for CommandGitRefLister {
+    fn list_refs(&self, url: &str) -> Result<RemoteRefs, GitError> {
+        // `--symref` adds a `ref: refs/heads/<branch>\tHEAD` line advertising the default
+        // branch; the explicit patterns keep branch and tag listing scoped as before while
+        // also matching `HEAD`.
+        let output = run_git_anywhere(&[
+            "ls-remote",
+            "--symref",
+            "--",
+            url,
+            "HEAD",
+            "refs/heads/*",
+            "refs/tags/*",
+        ])
+        .map_err(|e| fetch_error(url, e))?;
+        let mut refs = RemoteRefs::default();
+        for line in output.lines() {
+            if let Some(symref) = line.strip_prefix("ref: ")
+                && let Some((target, "HEAD")) = symref.split_once('\t')
+            {
+                refs.head_branch = target.strip_prefix("refs/heads/").map(str::to_owned);
+                continue;
+            }
+            // Every other line is `<object-id>\t<ref-name>`.
+            let Some((_, name)) = line.split_once('\t') else {
+                continue;
+            };
+            if let Some(branch) = name.strip_prefix("refs/heads/") {
+                refs.branches.push(branch.to_owned());
+            } else if let Some(tag) = name.strip_prefix("refs/tags/") {
+                // An annotated tag advertises a second, peeled `^{}` entry for its commit;
+                // the tag name itself is what URL boundary resolution matches against.
+                if let Some(plain) = tag.strip_suffix("^{}") {
+                    if !refs.tags.iter().any(|t| t == plain) {
+                        refs.tags.push(plain.to_owned());
+                    }
+                } else if !refs.tags.iter().any(|t| t == tag) {
+                    refs.tags.push(tag.to_owned());
+                }
+            }
+        }
+        Ok(refs)
+    }
+}
+
 /// Resolves sources with the external `git` command, caching checkouts under `cache_root`.
 pub struct CommandGitResolver {
     cache_root: PathBuf,
@@ -373,6 +440,61 @@ fn run(mut command: Command) -> Result<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn lists_branches_and_tags_of_a_local_remote() {
+        let tmp = tempfile::tempdir().unwrap();
+        let repo = tmp.path().join("repo");
+        std::fs::create_dir_all(&repo).unwrap();
+        let git = |args: &[&str]| {
+            let output = Command::new("git")
+                .arg("-C")
+                .arg(&repo)
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "git {args:?}: {}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        };
+        git(&["init", "--quiet", "--initial-branch", "main"]);
+        git(&["config", "user.email", "test@example.com"]);
+        git(&["config", "user.name", "test"]);
+        std::fs::write(repo.join("file.txt"), "content").unwrap();
+        git(&["add", "."]);
+        git(&["commit", "--quiet", "-m", "initial"]);
+        git(&["branch", "feature/x"]);
+        // One lightweight and one annotated tag: the annotated tag also advertises a peeled
+        // `^{}` entry, which must not surface as a second tag.
+        git(&["tag", "v1.0.0"]);
+        git(&["tag", "-a", "v2.0.0", "-m", "release"]);
+
+        let refs = CommandGitRefLister
+            .list_refs(repo.to_str().unwrap())
+            .unwrap();
+
+        let mut branches = refs.branches.clone();
+        branches.sort();
+        assert_eq!(branches, ["feature/x", "main"]);
+        let mut tags = refs.tags.clone();
+        tags.sort();
+        assert_eq!(tags, ["v1.0.0", "v2.0.0"]);
+        assert_eq!(refs.head_branch.as_deref(), Some("main"));
+    }
+
+    #[test]
+    fn listing_an_unreachable_remote_is_a_fetch_error() {
+        let tmp = tempfile::tempdir().unwrap();
+        let missing = tmp.path().join("missing-repo");
+
+        let error = CommandGitRefLister
+            .list_refs(missing.to_str().unwrap())
+            .unwrap_err();
+
+        assert!(matches!(error, GitError::Fetch(_)));
+    }
 
     #[test]
     fn commit_sha_accepts_exactly_40_lowercase_hex() {
